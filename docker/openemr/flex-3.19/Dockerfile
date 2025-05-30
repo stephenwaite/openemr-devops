@@ -7,7 +7,7 @@ RUN apk add --no-cache \
     php83-json php83-pdo php83-pdo_mysql php83-curl php83-ldap php83-openssl php83-iconv \
     php83-xml php83-xsl php83-gd php83-zip php83-soap php83-mbstring php83-zlib \
     php83-mysqli php83-sockets php83-xmlreader php83-redis perl php83-simplexml php83-xmlwriter php83-phar php83-fileinfo \
-    php83-sodium php83-calendar php83-intl php83-opcache php83-pecl-apcu php83-fpm \
+    php83-sodium php83-calendar php83-intl php83-opcache php83-pecl-apcu php83-fpm php83-bcmath\
     mysql-client mariadb-connector-c tar curl imagemagick nodejs npm \
     certbot openssl git openssl-dev dcron \
     rsync shadow jq ncurses \

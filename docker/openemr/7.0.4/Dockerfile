@@ -7,7 +7,7 @@ RUN apk add --no-cache \
     php84-json php84-pdo php84-pdo_mysql php84-curl php84-ldap php84-openssl php84-iconv \
     php84-xml php84-xsl php84-gd php84-zip php84-soap php84-mbstring php84-zlib \
     php84-mysqli php84-sockets php84-xmlreader php84-redis php84-simplexml php84-xmlwriter php84-phar php84-fileinfo \
-    php84-sodium php84-calendar php84-intl php84-opcache php84-pecl-apcu php84-fpm \
+    php84-sodium php84-calendar php84-intl php84-opcache php84-pecl-apcu php84-fpm php84-bcmath\
     perl mariadb-client mariadb-connector-c tar curl imagemagick nodejs npm \
     certbot openssl openssl-dev dcron \
     rsync shadow ncurses \
