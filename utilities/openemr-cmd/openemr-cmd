@@ -8,7 +8,7 @@ set -euo pipefail
 # Version   : See below --version section
 # Copyright : Copyright (c) 2020 Reid Liu <guliu@redhat.com>
 # Copyright : Copyright (c) 2020-2025 Brady Miller <brady.g.miller@gmail.com>
-# Copyright : Copyright (c) 2025 Matt Summers <matt@openCoreEMR.com> 
+# Copyright : Copyright (c) 2025 Matt Summers <matt@openCoreEMR.com>
 # Author    : Reid Liu <guliu@redhat.com>
 # Author    : Brady Miller <brady.g.miller@gmail.com>
 # Author    : Matt Summers <matt@openCoreEMR.com>
@@ -16,8 +16,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.20"
-
+VERSION="1.0.21"
 # If the docker is snap or non-snap docker
 # Setting the container names accordingly
 get_container_names() {
@@ -129,7 +128,7 @@ check_docker_names() {
 		echo "e.g $(basename "$0") [docker-names|dn] php"
 		echo '***************************************************************'
 		echo '=======Running Docker Names======='
-		
+
         # Capture output, check if empty
         local running_containers
         running_containers=$(docker ps --format "{{.Status}}\t{{.Names}}" | { grep -v NAMES || true; } | sort -n)
@@ -383,6 +382,8 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
   echo "  ljr, lint-javascript-report        To create a report of javascript styling issues"
   echo "  ljf, lint-javascript-fix           To fix javascript styling issues"
   echo "  pp, php-parserror                  To check PHP parsing errors"
+  echo "  rd, rector-dry-run                 To dry-run Rector changes"
+  echo "  rp, rector-process                 To process Rector changes"
   echo "  xl, xdebug-log                     To check xdebug log"
   echo "  lxp, list-xdebug-profiles          To list xdebug profiles"
   echo 'test-management:'
@@ -621,6 +622,12 @@ case "${FIRST_ARG}" in
 	pp)
 		run_devtools_in_docker "${CONTAINER_ID}" php-parserror
 		;;
+    rd)
+        run_devtools_in_docker "${CONTAINER_ID}" rector-dry-run
+        ;;
+    rp)
+        run_devtools_in_docker "${CONTAINER_ID}" rector-process
+        ;;
 	ut)
 		run_devtools_in_docker "${CONTAINER_ID}" unit-test
 		;;
