@@ -79,7 +79,7 @@ if [ "$1" == "rector-process" ]; then
 fi
 
 if [ "$1" == "unit-test" ] || [ "$1" == "clean-sweep" ] || [ "$1" == "clean-sweep-tests" ]; then
-    echo "Running OpenEMR PHP Unit tests"docker/openemr/flex-edge/utilities/devtools
+    echo "Running OpenEMR PHP Unit tests"
     cd /var/www/localhost/htdocs/openemr
     vendor/bin/phpunit --testsuite unit --testdox
 fi
