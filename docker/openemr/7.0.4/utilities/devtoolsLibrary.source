@@ -85,7 +85,7 @@ resetOpenemr() {
 installOpenemr() {
     echo "Re-installing OpenEMR"
     cp /root/auto_configure.php /var/www/localhost/htdocs/
-    php /var/www/localhost/htdocs/auto_configure.php -f ${CONFIGURATION}
+    php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
     rm -f /var/www/localhost/htdocs/auto_configure.php
 }
 
@@ -261,21 +261,21 @@ generateMultisiteBank() {
     # Activate older versions of InstallerAuto that require `sed` activation.
     sed -i "s@exit;@//exit;@" /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php
     a=1
-    while [ ${a} -le "$1" ]
+    while [ "${a}" -le "$1" ]
     do
         run="run${a}"
         echo "dropping ${run} sql database, sql user, and directory if they already exist (just ignore any errors that are displayed)"
         mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" -e "DROP DATABASE ${run}"
         mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" -e "DROP USER '${run}'"
-        rm -fr /var/www/localhost/htdocs/openemr/sites/${run}
+        rm -fr "/var/www/localhost/htdocs/openemr/sites/${run}"
         rm /tmp/setup_dump.sql
         echo "adding ${run} multisite"
-        php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass="${MYSQL_ROOT_PASS}" server="${MYSQL_HOST}" port="${CUSTOM_PORT}" loginhost=% login=${run} pass=${run} dbname=${run} site=${run} source_site_id=default clone_database=yes
-        chown -R apache /var/www/localhost/htdocs/openemr/sites/${run}
-        find /var/www/localhost/htdocs/openemr/sites/${run} -type d -print0 | xargs -0 chmod 500
-        find /var/www/localhost/htdocs/openemr/sites/${run} -type f -print0 | xargs -0 chmod 400
-        find /var/www/localhost/htdocs/openemr/sites/${run}/documents -type d -print0 | xargs -0 chmod 700
-        find /var/www/localhost/htdocs/openemr/sites/${run}/documents -type f -print0 | xargs -0 chmod 700
+        php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass="${MYSQL_ROOT_PASS}" server="${MYSQL_HOST}" port="${CUSTOM_PORT}" loginhost=% login="${run}" pass="${run}" dbname="${run}" site="${run}" source_site_id=default clone_database=yes
+        chown -R "apache /var/www/localhost/htdocs/openemr/sites/${run}"
+        find "/var/www/localhost/htdocs/openemr/sites/${run}" -type d -print0 | xargs -0 chmod 500
+        find "/var/www/localhost/htdocs/openemr/sites/${run}" -type f -print0 | xargs -0 chmod 400
+        find "/var/www/localhost/htdocs/openemr/sites/${run}/documents" -type d -print0 | xargs -0 chmod 700
+        find "/var/www/localhost/htdocs/openemr/sites/${run}/documents" -type f -print0 | xargs -0 chmod 700
         echo "completed adding ${run} multisite"
         a=$((a + 1))
     done
