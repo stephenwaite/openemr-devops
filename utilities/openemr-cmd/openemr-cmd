@@ -16,7 +16,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.21"
+VERSION="1.0.22"
 # If the docker is snap or non-snap docker
 # Setting the container names accordingly
 get_container_names() {
@@ -29,6 +29,9 @@ get_container_names() {
 # Set the container names
 get_container_names
 
+# Initialize ENV_VAR
+ENV_VAR=' '
+
 # Function to run the devtools script inside the specified container
 # Usage: run_devtools_in_docker <container_id> <devtools_command> [args...]
 run_devtools_in_docker() {
@@ -36,7 +39,7 @@ run_devtools_in_docker() {
     shift # Remove container_id from arguments
     # DEV_TOOLS is '/root/devtools'
     # "$@" passes the remaining arguments (devtools command and its args) correctly quoted
-    docker exec -i "${container_id}" "${DEV_TOOLS}" "$@"
+    docker exec -e "${ENV_VAR}" -i "${container_id}" "${DEV_TOOLS}" "$@"
 }
 
 # Function to run an arbitrary shell command string inside the specified container
@@ -287,6 +290,7 @@ put-client-cert(){
 
 import-random-patients(){
     # Use the devtools function, passing all arguments ($@)
+    ENV_VAR="OPENEMR_ENABLE_CCDA_IMPORT=1"
     run_devtools_in_docker "${CONTAINER_ID}" import-random-patients "$@"
 }
 
