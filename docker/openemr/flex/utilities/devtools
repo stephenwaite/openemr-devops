@@ -187,23 +187,29 @@ if [ "$1" = "php-parserror" ] || [ "$1" = "clean-sweep" ]; then
     find . -type f \( -name "*.php" -or -name "*.inc" \) \( -not -path "./vendor/*" -and -not -path "./node_modules/*" -and -not -path "./ccdaservice/node_modules}/*" \) -exec php -d error_reporting=32767 -l {} \; 2>&1 >&- | grep "^"
 fi
 
-if [ "$1" = rector-dry-run ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+if [ "$1" = "rector-dry-run" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
     echo "Rector PHP process dry-run changes"
     cd /var/www/localhost/htdocs/openemr
     php vendor/bin/rector process --dry-run
 fi
 
-if [ "$1" = rector-process ] || [ "$1" = "clean-sweep" ]; then
+if [ "$1" = "rector-process" ] || [ "$1" = "clean-sweep" ]; then
     echo "Rector PHP process changes"
     cd /var/www/localhost/htdocs/openemr
     php vendor/bin/rector process
 fi
 
-if [ "$1" = phpstan ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+if [ "$1" = "phpstan" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
     echo "PHPStan diagnose"
     cd /var/www/localhost/htdocs/openemr
     php vendor/bin/phpstan --memory-limit=8G diagnose
     php vendor/bin/phpstan --memory-limit=8G analyze
+fi
+
+if [ "$1" = "phpstan-generate" ]; then
+    echo "PHPStan regenerate baseline"
+    cd /var/www/localhost/htdocs/openemr
+    composer phpstan-baseline
 fi
 
 # ============================================================================
