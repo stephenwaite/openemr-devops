@@ -389,7 +389,7 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  rd, rector-dry-run                 To dry-run Rector changes"
     echo "  rp, rector-process                 To process Rector changes"
     echo "  pst, phpstan                       To run PHPStan diagnose and analyze"
-    echo "  psg, phpstan-generate              To run PHPStan to remove and regenerate baseline"
+    echo "  psg, phpstan-generate              To run PHPStan regenerate baseline"
     echo "  xl, xdebug-log                     To check xdebug log"
     echo "  lxp, list-xdebug-profiles          To list xdebug profiles"
     echo 'test-management:'
