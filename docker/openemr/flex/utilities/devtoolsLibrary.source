@@ -159,6 +159,7 @@ resetOpenemr() {
     rsync --delete --recursive --links --exclude .git /openemr/sites /var/www/localhost/htdocs/openemr/
     chmod 666 /var/www/localhost/htdocs/openemr/sites/default/sqlconf.php
     chown -R apache /var/www/localhost/htdocs/openemr/
+    gitAddSafeDirectory
 }
 
 # Runs OpenEMR's automated installation/configuration script.
@@ -178,6 +179,7 @@ installOpenemr() {
     cp /root/auto_configure.php /var/www/localhost/htdocs/
     php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
     rm -f /var/www/localhost/htdocs/auto_configure.php
+    gitAddSafeDirectory
 }
 
 # Installs demo data into OpenEMR for testing and development.
@@ -282,7 +284,7 @@ backupOpenemr() {
     mariadb-dump --skip-ssl --ignore-table="${CUSTOM_DATABASE}".onsite_activity_view --hex-blob -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" "${CUSTOM_DATABASE}" > "/snapshots/${1}/backup.sql"
     rsync --delete --recursive --links /var/www/localhost/htdocs/openemr/sites "/snapshots/${1}/"
     rsync --delete --recursive --links /couchdb/data "/snapshots/${1}/"
-    cd /snapshots || exit    
+    cd /snapshots || exit
     tar -C /snapshots -czf "${1}.tgz" "${1}"
     rm -fr "/snapshots/${1}"
 }
@@ -564,3 +566,9 @@ generateMultisiteBank() {
     sed -i "s@//exit;@exit;@" /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php
     echo "Completed setting up a multisite bank with following number of multisites (labeled run1, run2, run3, ...): run1...run${1}"
 }
+
+# for phpstan generate baseline to run without warning
+gitAddSafeDirectory() {
+    git config --global --add safe.directory /var/www/localhost/htdocs/openemr
+}
+
