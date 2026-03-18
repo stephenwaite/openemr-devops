@@ -1,4 +1,4 @@
-git reset --hard upstream/master[OpenEMR](https://www.open-emr.org) is the most popular open source electronic health records and medical practice management solution. OpenEMR's goal is a superior alternative to its proprietary counterparts. With passionate volunteers and contributors dedicated to guarding OpenEMR's status as a free, open source software solution for medical practices with a commitment to openness, kindness and cooperation.
+[OpenEMR](https://www.open-emr.org) is the most popular open source electronic health records and medical practice management solution. OpenEMR's goal is a superior alternative to its proprietary counterparts. With passionate volunteers and contributors dedicated to guarding OpenEMR's status as a free, open source software solution for medical practices with a commitment to openness, kindness and cooperation.
 
 **Current production OpenEMR version is 8.0.0**
 
