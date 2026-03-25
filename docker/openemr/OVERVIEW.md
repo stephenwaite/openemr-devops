@@ -4,7 +4,7 @@
 
 Supported tags:
 
-* `8.0.0`, `8.0.0.2`, `8.0.0.2-2026-03-18`, `latest` [Dockerfile](https://github.com/openemr/openemr-devops/blob/master/docker/openemr/8.0.0/Dockerfile) | [Instructions](https://github.com/openemr/openemr-devops/tree/master/docker/openemr/8.0.0/#openemr-official-docker-image)
+* `8.0.0`, `8.0.0.3`, `8.0.0.3-2026-03-25`, `latest` [Dockerfile](https://github.com/openemr/openemr-devops/blob/master/docker/openemr/8.0.0/Dockerfile) | [Instructions](https://github.com/openemr/openemr-devops/tree/master/docker/openemr/8.0.0/#openemr-official-docker-image)
 * `7.0.4`, `7.0.4.0`, `7.0.4.0-2025-12-24` [Dockerfile](https://github.com/openemr/openemr-devops/blob/master/docker/openemr/7.0.4/Dockerfile) | [Instructions](https://github.com/openemr/openemr-devops/tree/master/docker/openemr/7.0.4/#openemr-official-docker-image)
 * `8.0.1`, `next`, `dev` [Dockerfile](https://github.com/openemr/openemr-devops/blob/master/docker/openemr/8.0.1/Dockerfile) | [Instructions](https://github.com/openemr/openemr-devops/tree/master/docker/openemr/8.0.1/#openemr-official-docker-image)
 * `flex-3.22-php-8.4` `flex-3.22` `flex` [Dockerfile](https://github.com/openemr/openemr-devops/blob/master/docker/openemr/flex/Dockerfile) | [Instructions](https://github.com/openemr/openemr-devops/tree/master/docker/openemr/flex/#openemr-official-docker-image)
