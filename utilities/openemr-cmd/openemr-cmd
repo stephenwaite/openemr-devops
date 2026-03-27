@@ -346,26 +346,24 @@ docker-pull-image(){
         exit 1
     fi
 
-    check_docker_compose_install
+    local services
+    services=$(run_docker_compose -f "${COMPOSE_FILE}" config --services 2>/dev/null)
 
-    local docker_images
-    docker_images=$("${DOCKER_COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" config --images 2>/dev/null)
-
-    if [[ -z "${docker_images}" ]]; then
-        echo "No images found in ${COMPOSE_FILE}"
+    if [[ -z "${services}" ]]; then
+        echo "No services found in ${COMPOSE_FILE}"
         return
     fi
 
-    local IMAGE RESP
-    while IFS= read -r IMAGE; do
-        [[ -z "${IMAGE}" ]] && continue
-        read -r -e -p "Do you wish to pull ${IMAGE} ? [Y/n] " RESP </dev/tty
+    local SERVICE RESP
+    while IFS= read -r SERVICE; do
+        [[ -z "${SERVICE}" ]] && continue
+        read -r -e -p "Do you wish to pull ${SERVICE} ? [Y/n] " RESP </dev/tty
         if [[ -z "${RESP}" || "${RESP,,}" = y ]]; then
-            docker pull "${IMAGE}"
+            run_docker_compose -f "${COMPOSE_FILE}" pull "${SERVICE}"
         else
-            echo "Skipping ${IMAGE}"
+            echo "Skipping ${SERVICE}"
         fi
-    done <<< "${docker_images}"
+    done <<< "${services}"
 }
 
 USAGE_EXIT_CODE=13
