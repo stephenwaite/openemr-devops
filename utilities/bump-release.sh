@@ -236,7 +236,8 @@ if [ -z "$OLD_SHORT" ]; then
 fi
 
 if $COPY_MODE; then
-    echo "NOTE: build-${NEW_SHORT}.yml was copied from build-${OLD_SHORT}.yml and will need"
-    echo "      to be split into two workflows (build-${NEW_SHORT}.yml and build-$(echo $NEW_SHORT | awk '{print $1+1}').yml)"
-    echo "      with the correct branch refs and tags before committing."
+    echo "NOTE: build-${NEW_SHORT}.yml was copied from build-${OLD_SHORT}.yml and needs manual fixes:"
+    echo "      1. build-${NEW_SHORT}.yml: change branch ref to rel-${NEW_SHORT}, REMOVE 'dev' tag, keep 'next'"
+    echo "      2. Create build-$(echo $((${NEW_SHORT}+1)).yml: point to master, tags: ${NEW}.1-equiv and 'dev'"
+    echo "      3. Delete build-${OLD_SHORT}.yml - superseded by both new workflows"
 fi
