@@ -1,21 +1,42 @@
 #!/bin/bash
-# usage: bump-release.sh [--dry-run] OLD_VERSION NEW_VERSION [OLD_SHORT NEW_SHORT]
-# example: bump-release.sh --dry-run 8.0.1 8.1.0 801 810
+# usage: bump-release.sh [--dry-run] [--copy] OLD_VERSION NEW_VERSION [OLD_SHORT NEW_SHORT]
+#
+# Move mode (default) - use when old version will never be released:
+#   ./bump-release.sh 8.0.1 8.1.0 801 810
+#
+# Copy mode - use when old version still needs to exist alongside new:
+#   ./bump-release.sh --copy 8.1.0 8.1.1 810 811
+#
+# Dry run either mode:
+#   ./bump-release.sh --dry-run 8.0.1 8.1.0 801 810
+#   ./bump-release.sh --dry-run --copy 8.1.0 8.1.1 810 811
 
 DRY_RUN=false
-if [ "$1" = "--dry-run" ]; then
-    DRY_RUN=true
-    shift
-fi
+COPY_MODE=false
 
-OLD=${1:?Usage: $0 [--dry-run] OLD_VERSION NEW_VERSION [OLD_SHORT NEW_SHORT]}
-NEW=${2:?Usage: $0 [--dry-run] OLD_VERSION NEW_VERSION [OLD_SHORT NEW_SHORT]}
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true; shift ;;
+        --copy)    COPY_MODE=true; shift ;;
+    esac
+done
+
+OLD=${1:?Usage: $0 [--dry-run] [--copy] OLD_VERSION NEW_VERSION [OLD_SHORT NEW_SHORT]}
+NEW=${2:?Usage: $0 [--dry-run] [--copy] OLD_VERSION NEW_VERSION [OLD_SHORT NEW_SHORT]}
 OLD_SHORT="${3:-}"
 NEW_SHORT="${4:-}"
 
 DRY="[DRY RUN] "
 if $DRY_RUN; then
     echo "*** DRY RUN MODE - no changes will be made ***"
+    echo ""
+fi
+
+if $COPY_MODE; then
+    echo "*** COPY MODE - old directories will be preserved ***"
+    echo ""
+else
+    echo "*** MOVE MODE - old directories will be removed ***"
     echo ""
 fi
 
@@ -33,7 +54,7 @@ show_matches() {
     done
 }
 
-# --- Pass 1: Move (rename) version-named directories ---
+# --- Pass 1: Move or copy version-named directories ---
 echo "Searching for directories named with version $OLD ..."
 dirs=$(find . -type d -name "*${OLD}*" -not -path "*/obsolete/*")
 
@@ -43,13 +64,21 @@ if [ -n "$dirs" ]; then
     echo ""
 
     if ! $DRY_RUN; then
-        echo "Will MOVE directories and update contents $OLD -> $NEW. Hit any key to continue, ctrl-c to abort."
+        if $COPY_MODE; then
+            echo "Will COPY directories and update contents $OLD -> $NEW. Hit any key to continue, ctrl-c to abort."
+        else
+            echo "Will MOVE directories and update contents $OLD -> $NEW. Hit any key to continue, ctrl-c to abort."
+        fi
         read ans
     fi
 
     for old_dir in $dirs; do
         new_dir="${old_dir//$OLD/$NEW}"
-        echo "${DRY_RUN:+$DRY}Move directory: $old_dir -> $new_dir"
+        if $COPY_MODE; then
+            echo "${DRY_RUN:+$DRY}Copy directory: $old_dir -> $new_dir"
+        else
+            echo "${DRY_RUN:+$DRY}Move directory: $old_dir -> $new_dir"
+        fi
 
         find "$old_dir" -depth -name "*${OLD}*" | while read f; do
             new_f="${f//$OLD/$NEW}"
@@ -67,7 +96,11 @@ if [ -n "$dirs" ]; then
         done
 
         if ! $DRY_RUN; then
-            mv "$old_dir" "$new_dir"
+            if $COPY_MODE; then
+                cp -r "$old_dir" "$new_dir"
+            else
+                mv "$old_dir" "$new_dir"
+            fi
 
             find "$new_dir" -depth -name "*${OLD}*" | while read f; do
                 new_f="${f//$OLD/$NEW}"
@@ -87,7 +120,7 @@ else
     echo "No directories found matching $OLD"
 fi
 
-# --- Pass 1b: Rename individual files matching OLD_SHORT outside versioned dirs ---
+# --- Pass 1b: Rename or copy individual files matching OLD_SHORT outside versioned dirs ---
 if [ -n "$OLD_SHORT" ]; then
     echo ""
     echo "Searching for files named with short version $OLD_SHORT ..."
@@ -99,9 +132,16 @@ if [ -n "$OLD_SHORT" ]; then
     if [ -n "$short_files" ]; then
         echo "$short_files" | while read f; do
             new_f="${f//$OLD_SHORT/$NEW_SHORT}"
-            echo "  ${DRY_RUN:+$DRY}Rename file: $f -> $new_f"
-            if ! $DRY_RUN; then
-                mv "$f" "$new_f"
+            if $COPY_MODE; then
+                echo "  ${DRY_RUN:+$DRY}Copy file: $f -> $new_f"
+                if ! $DRY_RUN; then
+                    cp "$f" "$new_f"
+                fi
+            else
+                echo "  ${DRY_RUN:+$DRY}Rename file: $f -> $new_f"
+                if ! $DRY_RUN; then
+                    mv "$f" "$new_f"
+                fi
             fi
         done
     else
@@ -192,5 +232,11 @@ echo ""
 if [ -z "$OLD_SHORT" ]; then
     echo "NOTE: Files with dotless version names (e.g. build-801.yml) were NOT renamed."
     echo "      Re-run with short version args to handle these:"
-    echo "      $0 [--dry-run] $OLD $NEW 801 810"
+    echo "      $0 [--dry-run] [--copy] $OLD $NEW 801 810"
+fi
+
+if $COPY_MODE; then
+    echo "NOTE: build-${NEW_SHORT}.yml was copied from build-${OLD_SHORT}.yml and will need"
+    echo "      to be split into two workflows (build-${NEW_SHORT}.yml and build-$(echo $NEW_SHORT | awk '{print $1+1}').yml)"
+    echo "      with the correct branch refs and tags before committing."
 fi
