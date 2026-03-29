@@ -87,7 +87,8 @@ if [[ -n "${dirs}" ]]; then
         done
 
         find "${old_dir}" -type f | while IFS= read -r f; do
-            if file "${f}" | grep -q text; then
+            file_type=$(file "${f}")
+            if echo "${file_type}" | grep -q text; then
                 if grep -q "${OLD}" "${f}"; then
                     new_f="${f//${OLD}/${NEW}}"
                     echo "  ${DRY_RUN:+${DRY}}Update contents: ${f} -> ${new_f}"
@@ -113,7 +114,8 @@ if [[ -n "${dirs}" ]]; then
             done
 
             find "${new_dir}" -type f | while IFS= read -r f; do
-                if file "${f}" | grep -q text; then
+                file_type=$(file "${f}")
+                if echo "${file_type}" | grep -q text; then
                     if grep -q "${OLD}" "${f}"; then
                         sed -i "s/${OLD}/${NEW}/g" "${f}"
                     fi
@@ -173,7 +175,8 @@ if ! ${COPY_MODE}; then
     else
         echo ""
         echo "${matches}" | while IFS= read -r f; do
-            if file "${f}" | grep -q text; then
+            file_type=$(file "${f}")
+            if echo "${file_type}" | grep -q text; then
                 echo "  ${DRY_RUN:+${DRY}}Update contents: ${f}"
                 show_matches "${f}" "${OLD}" "${NEW}"
             fi
@@ -185,7 +188,8 @@ if ! ${COPY_MODE}; then
             read -r _ans
 
             echo "${matches}" | while IFS= read -r f; do
-                if file "${f}" | grep -q text; then
+                file_type=$(file "${f}")
+                if echo "${file_type}" | grep -q text; then
                     echo "  Updating: ${f}"
                     sed -i "s/${OLD}/${NEW}/g" "${f}"
                 fi
@@ -210,7 +214,8 @@ if [[ -n "${OLD_SHORT}" ]] && ! ${COPY_MODE}; then
     else
         echo ""
         echo "${short_matches}" | while IFS= read -r f; do
-            if file "${f}" | grep -q text; then
+            file_type=$(file "${f}")
+            if echo "${file_type}" | grep -q text; then
                 echo "  ${DRY_RUN:+${DRY}}Update contents: ${f}"
                 show_matches "${f}" "${OLD_SHORT}" "${NEW_SHORT}"
             fi
@@ -222,7 +227,8 @@ if [[ -n "${OLD_SHORT}" ]] && ! ${COPY_MODE}; then
             read -r _ans
 
             echo "${short_matches}" | while IFS= read -r f; do
-                if file "${f}" | grep -q text; then
+                file_type=$(file "${f}")
+                if echo "${file_type}" | grep -q text; then
                     echo "  Updating: ${f}"
                     sed -i "s/${OLD_SHORT}/${NEW_SHORT}/g" "${f}"
                 fi
