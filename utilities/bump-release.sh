@@ -97,6 +97,10 @@ if [ -n "$dirs" ]; then
 
         if ! $DRY_RUN; then
             if $COPY_MODE; then
+                if [ -e "$new_dir" ]; then
+                    echo "  [SKIPPED] $new_dir already exists - will not overwrite"
+                    continue
+                fi
                 cp -r "$old_dir" "$new_dir"
             else
                 mv "$old_dir" "$new_dir"
@@ -133,9 +137,13 @@ if [ -n "$OLD_SHORT" ]; then
         echo "$short_files" | while read f; do
             new_f="${f//$OLD_SHORT/$NEW_SHORT}"
             if $COPY_MODE; then
-                echo "  ${DRY_RUN:+$DRY}Copy file: $f -> $new_f"
-                if ! $DRY_RUN; then
-                    cp "$f" "$new_f"
+                if [ -e "$new_f" ]; then
+                    echo "  [SKIPPED] $new_f already exists - will not overwrite"
+                else
+                    echo "  ${DRY_RUN:+$DRY}Copy file: $f -> $new_f"
+                    if ! $DRY_RUN; then
+                        cp "$f" "$new_f"
+                    fi
                 fi
             else
                 echo "  ${DRY_RUN:+$DRY}Rename file: $f -> $new_f"
@@ -150,45 +158,47 @@ if [ -n "$OLD_SHORT" ]; then
 fi
 
 # --- Pass 2: Find all remaining references across the whole repo ---
-echo ""
-echo "Scanning all files in repo for remaining references to $OLD ..."
-matches=$(grep -rl "$OLD" . \
-    --exclude-dir=".git" \
-    --exclude-dir="obsolete" \
-    --exclude="$(basename $0)" \
-    --exclude="demo_5_0_0_5.sql")
-
-if [ -z "$matches" ]; then
-    echo "No remaining references found."
-else
+if ! $COPY_MODE; then
     echo ""
-    echo "$matches" | while read f; do
-        if file "$f" | grep -q text; then
-            echo "  ${DRY_RUN:+$DRY}Update contents: $f"
-            show_matches "$f" "$OLD" "$NEW"
-        fi
-    done
-    echo ""
+    echo "Scanning all files in repo for remaining references to $OLD ..."
+    matches=$(grep -rl "$OLD" . \
+        --exclude-dir=".git" \
+        --exclude-dir="obsolete" \
+        --exclude="$(basename $0)" \
+        --exclude="demo_5_0_0_5.sql")
 
-    if ! $DRY_RUN; then
-        echo "Will update all references $OLD -> $NEW in the files above. Hit any key to continue, ctrl-c to abort."
-        read ans
-
+    if [ -z "$matches" ]; then
+        echo "No remaining references found."
+    else
+        echo ""
         echo "$matches" | while read f; do
             if file "$f" | grep -q text; then
-                echo "  Updating: $f"
-                sed -i "s/${OLD}/${NEW}/g" "$f"
+                echo "  ${DRY_RUN:+$DRY}Update contents: $f"
+                show_matches "$f" "$OLD" "$NEW"
             fi
         done
+        echo ""
+
+        if ! $DRY_RUN; then
+            echo "Will update all references $OLD -> $NEW in the files above. Hit any key to continue, ctrl-c to abort."
+            read ans
+
+            echo "$matches" | while read f; do
+                if file "$f" | grep -q text; then
+                    echo "  Updating: $f"
+                    sed -i "s/${OLD}/${NEW}/g" "$f"
+                fi
+            done
+        fi
     fi
 fi
-
 # --- Pass 2b: Find remaining references to OLD_SHORT if provided ---
-if [ -n "$OLD_SHORT" ]; then
+if [ -n "$OLD_SHORT" ] && ! $COPY_MODE; then
     echo ""
     echo "Scanning all files in repo for remaining references to $OLD_SHORT ..."
     short_matches=$(grep -rl "$OLD_SHORT" . \
         --exclude-dir=".git" \
+        --exclude-dir=".idea" \
         --exclude-dir="obsolete" \
         --exclude="$(basename $0)" \
         --exclude="demo_5_0_0_5.sql")
@@ -234,10 +244,7 @@ if [ -z "$OLD_SHORT" ]; then
     echo "      Re-run with short version args to handle these:"
     echo "      $0 [--dry-run] [--copy] $OLD $NEW 801 810"
 fi
-
 if $COPY_MODE; then
-    echo "NOTE: build-${NEW_SHORT}.yml was copied from build-${OLD_SHORT}.yml and needs manual fixes:"
-    echo "      1. build-${NEW_SHORT}.yml: change branch ref to rel-${NEW_SHORT}, REMOVE 'dev' tag, keep 'next'"
-    echo "      2. Create build-$(echo $((${NEW_SHORT}+1)).yml: point to master, tags: ${NEW}.1-equiv and 'dev'"
-    echo "      3. Delete build-${OLD_SHORT}.yml - superseded by both new workflows"
+    echo "NOTE: build-${NEW_SHORT}.yml was copied from build-${OLD_SHORT}.yml."
+    echo "      Review and update branch refs and tags before committing."
 fi
