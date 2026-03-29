@@ -45,14 +45,14 @@ show_matches() {
     local file="${1}"
     local search="${2}"
     local replace="${3}"
-    grep -n "${search}" "${file}" | while IFS= read -r line; do
+    while IFS= read -r line; do
         lineno="${line%%:*}"
         content="${line#*:}"
         new_content="${content//${search}/${replace}}"
         echo "    line ${lineno}:"
         echo "      was: ${content}"
         echo "      now: ${new_content}"
-    done
+    done < <(grep -n "${search}" "${file}")
 }
 
 # --- Pass 1: Move or copy version-named directories ---
@@ -81,12 +81,12 @@ if [[ -n "${dirs}" ]]; then
             echo "${DRY_RUN:+${DRY}}Move directory: ${old_dir} -> ${new_dir}"
         fi
 
-        find "${old_dir}" -depth -name "*${OLD}*" | while IFS= read -r f; do
+        while IFS= read -r f; do
             new_f="${f//${OLD}/${NEW}}"
             echo "  ${DRY_RUN:+${DRY}}Rename file: ${f} -> ${new_f}"
-        done
+        done < <(find "${old_dir}" -depth -name "*${OLD}*")
 
-        find "${old_dir}" -type f | while IFS= read -r f; do
+        while IFS= read -r f; do
             file_type=$(file "${f}")
             if echo "${file_type}" | grep -q text; then
                 if grep -q "${OLD}" "${f}"; then
@@ -95,7 +95,7 @@ if [[ -n "${dirs}" ]]; then
                     show_matches "${f}" "${OLD}" "${NEW}"
                 fi
             fi
-        done
+        done < <(find "${old_dir}" -type f)
 
         if ! ${DRY_RUN}; then
             if ${COPY_MODE}; then
@@ -108,19 +108,19 @@ if [[ -n "${dirs}" ]]; then
                 mv "${old_dir}" "${new_dir}"
             fi
 
-            find "${new_dir}" -depth -name "*${OLD}*" | while IFS= read -r f; do
+            while IFS= read -r f; do
                 new_f="${f//${OLD}/${NEW}}"
                 mv "${f}" "${new_f}"
-            done
+            done < <(find "${new_dir}" -depth -name "*${OLD}*")
 
-            find "${new_dir}" -type f | while IFS= read -r f; do
+            while IFS= read -r f; do
                 file_type=$(file "${f}")
                 if echo "${file_type}" | grep -q text; then
                     if grep -q "${OLD}" "${f}"; then
                         sed -i "s/${OLD}/${NEW}/g" "${f}"
                     fi
                 fi
-            done
+            done < <(find "${new_dir}" -type f)
         fi
     done
 else
@@ -137,7 +137,7 @@ if [[ -n "${OLD_SHORT}" ]]; then
         -not -name "$(basename "$0")")
 
     if [[ -n "${short_files}" ]]; then
-        echo "${short_files}" | while IFS= read -r f; do
+        while IFS= read -r f; do
             new_f="${f//${OLD_SHORT}/${NEW_SHORT}}"
             if ${COPY_MODE}; then
                 if [[ -e "${new_f}" ]]; then
@@ -154,7 +154,7 @@ if [[ -n "${OLD_SHORT}" ]]; then
                     mv "${f}" "${new_f}"
                 fi
             fi
-        done
+        done < <(echo "${short_files}")
     else
         echo "No files found matching ${OLD_SHORT}"
     fi
@@ -174,26 +174,26 @@ if ! ${COPY_MODE}; then
         echo "No remaining references found."
     else
         echo ""
-        echo "${matches}" | while IFS= read -r f; do
+        while IFS= read -r f; do
             file_type=$(file "${f}")
             if echo "${file_type}" | grep -q text; then
                 echo "  ${DRY_RUN:+${DRY}}Update contents: ${f}"
                 show_matches "${f}" "${OLD}" "${NEW}"
             fi
-        done
+        done < <(echo "${matches}")
         echo ""
 
         if ! ${DRY_RUN}; then
             echo "Will update all references ${OLD} -> ${NEW} in the files above. Hit any key to continue, ctrl-c to abort."
             read -r _ans
 
-            echo "${matches}" | while IFS= read -r f; do
+            while IFS= read -r f; do
                 file_type=$(file "${f}")
                 if echo "${file_type}" | grep -q text; then
                     echo "  Updating: ${f}"
                     sed -i "s/${OLD}/${NEW}/g" "${f}"
                 fi
-            done
+            done < <(echo "${matches}")
         fi
     fi
 fi
@@ -213,26 +213,26 @@ if [[ -n "${OLD_SHORT}" ]] && ! ${COPY_MODE}; then
         echo "No remaining references to ${OLD_SHORT} found."
     else
         echo ""
-        echo "${short_matches}" | while IFS= read -r f; do
+        while IFS= read -r f; do
             file_type=$(file "${f}")
             if echo "${file_type}" | grep -q text; then
                 echo "  ${DRY_RUN:+${DRY}}Update contents: ${f}"
                 show_matches "${f}" "${OLD_SHORT}" "${NEW_SHORT}"
             fi
-        done
+        done < <(echo "${short_matches}")
         echo ""
 
         if ! ${DRY_RUN}; then
             echo "Will update all references ${OLD_SHORT} -> ${NEW_SHORT} in the files above. Hit any key to continue, ctrl-c to abort."
             read -r _ans
 
-            echo "${short_matches}" | while IFS= read -r f; do
+            while IFS= read -r f; do
                 file_type=$(file "${f}")
                 if echo "${file_type}" | grep -q text; then
                     echo "  Updating: ${f}"
                     sed -i "s/${OLD_SHORT}/${NEW_SHORT}/g" "${f}"
                 fi
-            done
+            done < <(echo "${short_matches}")
         fi
     fi
 fi
