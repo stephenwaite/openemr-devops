@@ -52,7 +52,7 @@ show_matches() {
         echo "    line ${lineno}:"
         echo "      was: ${content}"
         echo "      now: ${new_content}"
-    done < <(grep -n "${search}" "${file}")
+    done < <(grep -n "${search}" "${file}" || true)
 }
 
 # --- Pass 1: Move or copy version-named directories ---
@@ -84,7 +84,7 @@ if [[ -n "${dirs}" ]]; then
         while IFS= read -r f; do
             new_f="${f//${OLD}/${NEW}}"
             echo "  ${DRY_RUN:+${DRY}}Rename file: ${f} -> ${new_f}"
-        done < <(find "${old_dir}" -depth -name "*${OLD}*")
+        done < <(find "${old_dir}" -depth -name "*${OLD}*" || true)
 
         while IFS= read -r f; do
             file_type=$(file "${f}")
@@ -95,7 +95,7 @@ if [[ -n "${dirs}" ]]; then
                     show_matches "${f}" "${OLD}" "${NEW}"
                 fi
             fi
-        done < <(find "${old_dir}" -type f)
+        done < <(find "${old_dir}" -type f || true)
 
         if ! ${DRY_RUN}; then
             if ${COPY_MODE}; then
@@ -111,7 +111,7 @@ if [[ -n "${dirs}" ]]; then
             while IFS= read -r f; do
                 new_f="${f//${OLD}/${NEW}}"
                 mv "${f}" "${new_f}"
-            done < <(find "${new_dir}" -depth -name "*${OLD}*")
+            done < <(find "${new_dir}" -depth -name "*${OLD}*" || true)
 
             while IFS= read -r f; do
                 file_type=$(file "${f}")
@@ -120,7 +120,7 @@ if [[ -n "${dirs}" ]]; then
                         sed -i "s/${OLD}/${NEW}/g" "${f}"
                     fi
                 fi
-            done < <(find "${new_dir}" -type f)
+            done < <(find "${new_dir}" -type f || true)
         fi
     done
 else
