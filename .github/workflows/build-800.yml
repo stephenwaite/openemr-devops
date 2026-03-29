@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     # Only run from master branch on the main repository
-    if: github.repository_owner == 'openemr' && github.repository == 'openemr/openemr-devops' && github.ref == 'refs/heads/rel-800'
+    if: github.repository_owner == 'openemr' && github.repository == 'openemr/openemr-devops' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-22.04
     steps:
       - name: Set up QEMU
