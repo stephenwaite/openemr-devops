@@ -43,7 +43,7 @@ jobs:
               TAGS="$TAGS,openemr/openemr:flex"
             fi
           fi
-          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
       - name: Build and push flex ${{ inputs.alpine_version }} docker (PHP ${{ matrix.php_version }})
         uses: docker/build-push-action@v7
         with:

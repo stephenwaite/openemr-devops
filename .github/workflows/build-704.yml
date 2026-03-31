@@ -20,7 +20,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Get build date
         id: build_date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
       - name: Build and push 7.0.4 docker
         uses: docker/build-push-action@v7
         with:
