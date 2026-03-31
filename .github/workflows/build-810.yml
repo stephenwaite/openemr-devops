@@ -86,4 +86,4 @@ jobs:
             -t openemr/openemr:8.1.0 \
             -t openemr/openemr:next \
             -t openemr/openemr:8.1.0-${{ steps.build_date.outputs.date }} \
-            $(printf 'openemr/openemr@sha256:%s ' *)
+            $(ls | xargs -I{} echo 'openemr/openemr@sha256:{}')
