@@ -638,17 +638,28 @@ case "${FIRST_ARG}" in
         if [[ ! -f "../../.env" ]] || ! grep -q "^GITHUB_COMPOSER_TOKEN=." "../../.env" 2>/dev/null; then
             echo "No GITHUB_COMPOSER_TOKEN found in ../../.env — running setup first."
             setup_composer_env
+        else
+            # Validate the token is still active
+            local token
+            token=$(grep "^GITHUB_COMPOSER_TOKEN=" "../../.env" | cut -d= -f2)
+            local remaining
+            remaining=$(curl -sf -H "Authorization: token ${token}" \
+                https://api.github.com/rate_limit | grep -o '"remaining":[0-9]*' | head -1 | cut -d: -f2)
+            if [[ -z "${remaining}" || "${remaining}" -lt 100 ]]; then
+                echo "GITHUB_COMPOSER_TOKEN is expired, revoked, or rate-limited — running setup."
+                setup_composer_env
+            fi
         fi
-        run_docker_compose --env-file ../../.env up -d
+        run_docker_compose up -d
         ;;
     down)
-        run_docker_compose --env-file ../../.env down -v
+        run_docker_compose down -v
         ;;
     stop)
-        run_docker_compose --env-file ../../.env stop
+        run_docker_compose stop
         ;;
     start)
-        run_docker_compose --env-file ../../.env start
+        run_docker_compose start
         ;;
     s|shell)
         quick_open_a_docker_shell
