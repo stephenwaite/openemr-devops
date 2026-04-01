@@ -398,8 +398,8 @@ setup_composer_env() {
             echo "Found existing .env but no GITHUB_COMPOSER_TOKEN entry."
         fi
         local RESP
-        read -r -e -p "Update it? [Y/n] " RESP </dev/tty
-        if [[ -n "${RESP}" && "${RESP,,}" != "y" ]]; then
+        read -r -e -p "Update it? [y/N] " RESP </dev/tty
+        if [[ -z "${RESP}" || "${RESP,,}" != "y" ]]; then
             echo "No changes made."
             return
         fi
@@ -639,13 +639,10 @@ case "${FIRST_ARG}" in
             echo "No GITHUB_COMPOSER_TOKEN found in ../../.env — running setup first."
             setup_composer_env
         else
-            # Validate the token is still active
-            local token
-            token=$(grep "^GITHUB_COMPOSER_TOKEN=" "../../.env" | cut -d= -f2)
-            local remaining
-            remaining=$(curl -sf -H "Authorization: token ${token}" \
+            UP_TOKEN=$(grep "^GITHUB_COMPOSER_TOKEN=" "../../.env" | cut -d= -f2)
+            UP_REMAINING=$(curl -sf -H "Authorization: token ${UP_TOKEN}" \
                 https://api.github.com/rate_limit | grep -o '"remaining":[0-9]*' | head -1 | cut -d: -f2)
-            if [[ -z "${remaining}" || "${remaining}" -lt 100 ]]; then
+            if [[ -z "${UP_REMAINING}" || "${UP_REMAINING}" -lt 100 ]]; then
                 echo "GITHUB_COMPOSER_TOKEN is expired, revoked, or rate-limited — running setup."
                 setup_composer_env
             fi
