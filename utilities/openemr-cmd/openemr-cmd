@@ -374,7 +374,7 @@ setup_composer_env() {
 
     if [[ ! -f "docker-compose.yml" ]]; then
         echo "Error: docker-compose.yml not found in current directory." >&2
-        echo "Please run this command from the docker/development-easy directory." >&2
+        echo "Please run this command from any docker/development-* directory." >&2
         exit 1
     fi
 
@@ -435,9 +435,9 @@ setup_composer_env() {
         grep -v "^GITHUB_COMPOSER_TOKEN=" "${ENV_FILE}" 2>/dev/null || true
     } > "${ENV_FILE}.tmp"
     cat >> "${ENV_FILE}.tmp" << EOF
-# OpenEMR easydev environment variables
-# DO NOT COMMIT THIS FILE — contains sensitive credentials
-GITHUB_COMPOSER_TOKEN=${TOKEN}
+    # OpenEMR easydev environment variables
+    # DO NOT COMMIT THIS FILE — contains sensitive credentials
+    GITHUB_COMPOSER_TOKEN=${TOKEN}
 EOF
     mv "${ENV_FILE}.tmp" "${ENV_FILE}"
 
