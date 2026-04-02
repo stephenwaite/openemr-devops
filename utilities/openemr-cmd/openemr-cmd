@@ -385,7 +385,7 @@ setup_composer_env() {
     echo ""
     echo "A GitHub Personal Access Token lets Composer avoid GitHub API rate limits"
     echo "when pulling dependencies. It should never be committed to the repository."
-    echo "This writes GITHUB_COMPOSER_TOKEN plus its derived encoded variants to: ${ENV_FILE}"
+    echo "This writes the GITHUB_COMPOSER_TOKEN to: ${ENV_FILE}"
     echo ""
 
     # Show current state if .env already exists
@@ -406,12 +406,12 @@ setup_composer_env() {
         echo ""
     fi
 
-    echo "Generate a token at: https://github.com/settings/tokens"
-    echo "No special scopes are required for public repos."
+    echo "Generate a fine-grained personal access token at: https://github.com/settings/tokens"
+    echo "you only need the default, read-only access for public repos, selected."
     echo ""
 
     local TOKEN
-    read -r -e -p "Paste your GitHub Personal Access Token: " TOKEN </dev/tty
+    read -r -s -p "Paste your GitHub Personal Access Token: " TOKEN </dev/tty
 
     if [[ -z "${TOKEN}" ]]; then
         echo "Error: No token provided. Aborting." >&2
@@ -638,14 +638,6 @@ case "${FIRST_ARG}" in
         if [[ ! -f "../../.env" ]] || ! grep -q "^GITHUB_COMPOSER_TOKEN=." "../../.env" 2>/dev/null; then
             echo "No GITHUB_COMPOSER_TOKEN found in ../../.env — running setup first."
             setup_composer_env
-        else
-            UP_TOKEN=$(grep "^GITHUB_COMPOSER_TOKEN=" "../../.env" | cut -d= -f2)
-            UP_REMAINING=$(curl -sf -H "Authorization: token ${UP_TOKEN}" \
-                https://api.github.com/rate_limit | grep -o '"remaining":[0-9]*' | head -1 | cut -d: -f2)
-            if [[ -z "${UP_REMAINING}" || "${UP_REMAINING}" -lt 100 ]]; then
-                echo "GITHUB_COMPOSER_TOKEN is expired, revoked, or rate-limited — running setup."
-                setup_composer_env
-            fi
         fi
         run_docker_compose up -d
         ;;
