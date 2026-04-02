@@ -32,9 +32,9 @@ FROM alpine:${ALPINE_VERSION} AS base
 
 # PHP version configuration
 # Important: When updating PHP version, also update php.ini file to match
-ARG PHP_VERSION=8.4
+ARG PHP_VERSION=8.5
 ENV PHP_VERSION=${PHP_VERSION}
-# Create abbreviated version (e.g., "8.4" -> "84") for package naming
+# Create abbreviated version (e.g., "8.5" -> "85") for package naming
 ARG PHP_VERSION_ABBR=${PHP_VERSION//./}
 ENV PHP_VERSION_ABBR=${PHP_VERSION_ABBR}
 
