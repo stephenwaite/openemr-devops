@@ -21,13 +21,13 @@
 # ============================================================================
 # Alpine Linux version - centralized setting for easy updates
 # Note: This is NOT meant to be used as a build argument (unlike the flex series)
-ARG ALPINE_VERSION=3.22
+ARG ALPINE_VERSION=3.23
 FROM alpine:${ALPINE_VERSION} AS base
 
 # PHP version configuration
 # Note: This is NOT meant to be used as a build argument (unlike the flex series)
 # Important: When updating PHP version, also update php.ini file to match
-ARG PHP_VERSION=8.4
+ARG PHP_VERSION=8.5
 ENV PHP_VERSION=${PHP_VERSION}
 # Create abbreviated version (e.g., "8.4" -> "84") for package naming
 ARG PHP_VERSION_ABBR=${PHP_VERSION//./}
@@ -97,14 +97,14 @@ RUN apk add --no-cache \
     php${PHP_VERSION_ABBR}-ldap \
     php${PHP_VERSION_ABBR}-mbstring \
     php${PHP_VERSION_ABBR}-mysqli \
-    "$(if [ "${PHP_VERSION}" = "8.2" ] || [ "${PHP_VERSION}" = "8.3" ] || [ "${PHP_VERSION}" = "8.4" ]; then echo php${PHP_VERSION_ABBR}-opcache; fi)" \
+    php${PHP_VERSION_ABBR}-opcache \
     php${PHP_VERSION_ABBR}-openssl \
     php${PHP_VERSION_ABBR}-pdo \
     php${PHP_VERSION_ABBR}-pdo_mysql \
     php${PHP_VERSION_ABBR}-pecl-apcu \
     php${PHP_VERSION_ABBR}-pecl-imagick \
     php${PHP_VERSION_ABBR}-phar \
-    php${PHP_VERSION_ABBR}-redis \
+    php${PHP_VERSION_ABBR}-pecl-redis \
     php${PHP_VERSION_ABBR}-session \
     php${PHP_VERSION_ABBR}-simplexml \
     php${PHP_VERSION_ABBR}-soap \
