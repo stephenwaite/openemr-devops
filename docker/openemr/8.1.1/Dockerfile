@@ -93,11 +93,9 @@ RUN apk add --no-cache \
     php${PHP_VERSION_ABBR}-gd \
     php${PHP_VERSION_ABBR}-iconv \
     php${PHP_VERSION_ABBR}-intl \
-    php${PHP_VERSION_ABBR}-json \
     php${PHP_VERSION_ABBR}-ldap \
     php${PHP_VERSION_ABBR}-mbstring \
     php${PHP_VERSION_ABBR}-mysqli \
-    php${PHP_VERSION_ABBR}-opcache \
     php${PHP_VERSION_ABBR}-openssl \
     php${PHP_VERSION_ABBR}-pdo \
     php${PHP_VERSION_ABBR}-pdo_mysql \
