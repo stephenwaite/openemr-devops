@@ -27,7 +27,7 @@
 # BASE IMAGE CONFIGURATION
 # ============================================================================
 # Alpine Linux version - centralized setting for easy updates
-ARG ALPINE_VERSION=3.22
+ARG ALPINE_VERSION=3.23
 FROM alpine:${ALPINE_VERSION} AS base
 
 # PHP version configuration
@@ -125,7 +125,7 @@ RUN apk add --no-cache \
     php${PHP_VERSION_ABBR}-pecl-apcu \
     php${PHP_VERSION_ABBR}-pecl-imagick \
     php${PHP_VERSION_ABBR}-phar \
-    php${PHP_VERSION_ABBR}-redis \
+    "$(if [ "${PHP_VERSION}" = "8.5" ]; then echo php${PHP_VERSION_ABBR}-pecl-redis; else echo php${PHP_VERSION_ABBR}-redis; fi)" \
     php${PHP_VERSION_ABBR}-session \
     php${PHP_VERSION_ABBR}-simplexml \
     php${PHP_VERSION_ABBR}-soap \
