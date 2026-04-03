@@ -138,13 +138,13 @@ wait_for_healthy() {
     local waited=0
     local last_progress=0
     local progress_interval=30  # Show progress every 30 seconds
-    
+
     log_info "Waiting for container ${container_name} to become healthy (max ${max_wait}s)..."
-    
+
     while [[ "${waited}" -lt "${max_wait}" ]]; do
         local health_status
         health_status=$(docker inspect "${container_name}" --format '{{.State.Health.Status}}' 2>/dev/null || echo "starting")
-        
+
         if [[ "${health_status}" = "healthy" ]]; then
             log_success "Container ${container_name} is now healthy (took ${waited}s)"
             return 0
@@ -153,7 +153,7 @@ wait_for_healthy() {
             docker logs "${container_name}" --tail 50 2>&1 | tee -a "${LOG_FILE}" || true
             return 1
         fi
-        
+
         # Show progress every progress_interval seconds
         if [[ $((waited - last_progress)) -ge "${progress_interval}" ]]; then
             log_info "Still waiting... (${waited}s/${max_wait}s) - Status: ${health_status}"
@@ -161,16 +161,16 @@ wait_for_healthy() {
             # Show recent logs to keep user informed
             docker logs "${container_name}" --tail 5 2>&1 | sed 's/^/  > /' | tee -a "${LOG_FILE}" || true
         fi
-        
+
         sleep 2
         waited=$((waited + 2))
     done
-    
+
     # Get final health status and detailed healthcheck info for diagnostics
     local final_status
     final_status=$(docker inspect "${container_name}" --format '{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
     log_error "Container ${container_name} did not become healthy within ${max_wait}s (final status: ${final_status})"
-    
+
     # Show healthcheck details if available
     local health_log
     health_log=$(docker inspect "${container_name}" --format '{{json .State.Health}}' 2>/dev/null || echo "")
@@ -184,7 +184,7 @@ wait_for_healthy() {
             echo "${health_entries}" | sed 's/^/  /' | tee -a "${LOG_FILE}"
         fi
     fi
-    
+
     docker logs "${container_name}" --tail 50 2>&1 | tee -a "${LOG_FILE}" || true
     return 1
 }
@@ -356,7 +356,7 @@ EOF
     # Change to test directory before running docker compose
     # Docker Compose needs to be run from the directory containing docker-compose.yml
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-fresh" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -467,7 +467,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-manual" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -523,10 +523,10 @@ test_ssl_configuration() {
 
     local test_dir="${TESTS_DIR}/ssl_configuration"
     mkdir -p "${test_dir}/certs"
-    
+
     local flex_env_vars
     flex_env_vars=$(get_flex_env_vars)
-    
+
     # Note: Container generates its own self-signed certificates
     # We don't mount /etc/ssl as read-only to allow container to create certs
     cat > "${test_dir}/docker-compose.yml" <<EOF
@@ -583,7 +583,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-ssl" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -630,10 +630,10 @@ test_redis_sessions() {
 
     local test_dir="${TESTS_DIR}/redis_sessions"
     mkdir -p "${test_dir}"
-    
+
     local flex_env_vars
     flex_env_vars=$(get_flex_env_vars)
-    
+
     cat > "${test_dir}/docker-compose.yml" <<EOF
 
 services:
@@ -705,7 +705,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-redis" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -727,12 +727,14 @@ EOF
 
     # Check if Redis session handler is configured
     # Redis config is written to conf.d/99-redis-sessions.ini, not php.ini directly
-    # Binary container uses /usr/local/etc/php/conf.d/, standard containers use /etc/php84/conf.d/
+    # Binary container uses /usr/local/etc/php/conf.d/, standard containers use /etc/php${php_abbr}/conf.d/
     local redis_config_path
     if [[ "${VERSION}" = "binary" ]]; then
         redis_config_path="/usr/local/etc/php/conf.d/99-redis-sessions.ini"
     else
-        redis_config_path="/etc/php84/conf.d/99-redis-sessions.ini"
+        local php_abbr
+        php_abbr=$(docker exec "${container_name}" printenv PHP_VERSION_ABBR 2>/dev/null || echo "84")
+        redis_config_path="/etc/php${php_abbr}/conf.d/99-redis-sessions.ini"
     fi
     local redis_configured
     redis_configured=$(docker exec "${container_name}" grep -q "session.save_handler = redis" "${redis_config_path}" 2>/dev/null && echo "1" || echo "0")
@@ -761,10 +763,10 @@ test_swarm_mode() {
 
     local test_dir="${TESTS_DIR}/swarm_mode"
     mkdir -p "${test_dir}"
-    
+
     local flex_env_vars
     flex_env_vars=$(get_flex_env_vars)
-    
+
     cat > "${test_dir}/docker-compose.yml" <<EOF
 
 services:
@@ -846,7 +848,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-swarm" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -914,10 +916,10 @@ test_kubernetes_mode() {
 
     local test_dir="${TESTS_DIR}/kubernetes_mode"
     mkdir -p "${test_dir}"
-    
+
     local flex_env_vars
     flex_env_vars=$(get_flex_env_vars)
-    
+
     cat > "${test_dir}/docker-compose.yml" <<EOF
 
 services:
@@ -995,7 +997,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-k8s" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -1072,10 +1074,10 @@ test_xdebug_configuration() {
 
     local test_dir="${TESTS_DIR}/xdebug"
     mkdir -p "${test_dir}"
-    
+
     local flex_env_vars
     flex_env_vars=$(get_flex_env_vars)
-    
+
     cat > "${test_dir}/docker-compose.yml" <<EOF
 
 services:
@@ -1132,7 +1134,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-xdebug" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -1170,7 +1172,9 @@ EOF
     if [[ "${VERSION}" = "binary" ]]; then
         php_ini_path="/usr/local/etc/php/php.ini"
     else
-        php_ini_path="/etc/php84/php.ini"
+        local php_abbr
+        php_abbr=$(docker exec "${container_name}" printenv PHP_VERSION_ABBR 2>/dev/null || echo "84")
+        php_ini_path="/etc/php${php_abbr}/php.ini"
     fi
     local opcache_disabled
     opcache_disabled=$(docker exec "${container_name}" grep -q "opcache.enable=0" "${php_ini_path}" 2>/dev/null && echo "1" || echo "0")
@@ -1195,10 +1199,10 @@ test_document_upload() {
 
     local test_dir="${TESTS_DIR}/document_upload"
     mkdir -p "${test_dir}"
-    
+
     local flex_env_vars
     flex_env_vars=$(get_flex_env_vars)
-    
+
     cat > "${test_dir}/docker-compose.yml" <<EOF
 
 services:
@@ -1256,7 +1260,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     log_info "Starting containers..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
     if ! run_docker_compose "${PROJECT_NAME}-docs" -f docker-compose.yml up -d 2>&1 | tee -a "${LOG_FILE}"; then
@@ -1314,7 +1318,7 @@ test_docker_upgrade() {
     mkdir -p "${test_dir}"
     local flex_env_vars
     flex_env_vars=$(get_flex_env_vars)
-    
+
     cat > "${test_dir}/docker-compose.yml" <<EOF
 
 services:
@@ -1372,7 +1376,7 @@ networks:
 EOF
 
     cd "${test_dir}"
-    
+
     # Step 1: Start fresh installation and wait for it to complete
     log_info "Step 1: Starting fresh installation..."
     # shellcheck disable=SC2310  # Error handling is explicit via if/return
@@ -1419,7 +1423,7 @@ EOF
     local current_version
     current_version=$(docker exec "${container_name}" cat /root/docker-version 2>/dev/null || echo "0")
     log_info "Current container version (from /root/docker-version): ${current_version}"
-    
+
     # Verify code version file exists (needed for upgrade check)
     local code_version_exists
     code_version_exists=$(docker exec "${container_name}" test -f /var/www/localhost/htdocs/openemr/docker-version && echo "1" || echo "0")
@@ -1427,7 +1431,7 @@ EOF
         log_info "Creating code version file to match root version..."
         docker exec "${container_name}" sh -c "echo -n '${current_version}' > /var/www/localhost/htdocs/openemr/docker-version" 2>/dev/null || true
     fi
-    
+
     local code_version
     code_version=$(docker exec "${container_name}" cat /var/www/localhost/htdocs/openemr/docker-version 2>/dev/null || echo "0")
     log_info "Code version (from /var/www/localhost/htdocs/openemr/docker-version): ${code_version}"
@@ -1436,7 +1440,7 @@ EOF
     # Set it to version 1 (assuming current version is higher)
     log_info "Step 2: Setting older version marker to trigger upgrade..."
     docker exec "${container_name}" sh -c 'echo -n "1" > /var/www/localhost/htdocs/openemr/sites/default/docker-version' 2>/dev/null || true
-    
+
     # Verify the old version was set
     local old_version
     old_version=$(docker exec "${container_name}" cat /var/www/localhost/htdocs/openemr/sites/default/docker-version 2>/dev/null || echo "0")
@@ -1456,14 +1460,14 @@ EOF
     local log_size_before
     # shellcheck disable=SC2034  # log_size_before is captured but not used (reserved for future debugging)
     log_size_before=$(docker logs "${container_name}" 2>&1 | wc -l) || log_size_before="0"
-    
+
     # Step 5: Restart container to trigger upgrade check
     log_info "Step 4: Restarting container to trigger upgrade..."
     cd "${test_dir}"
     # shellcheck disable=SC2310  # Restart may fail if container is not running, which is acceptable
     run_docker_compose "${PROJECT_NAME}-upgrade" -f docker-compose.yml restart openemr 2>&1 | tee -a "${LOG_FILE}" || true
     cd - >/dev/null
-    
+
     # Wait a moment for container to restart
     sleep 5
 
@@ -1486,13 +1490,13 @@ EOF
     log_info "Step 5: Checking upgrade logs..."
     local all_logs
     all_logs=$(docker logs "${container_name}" 2>&1 || echo "")
-    
+
     local upgrade_started
     upgrade_started=$(echo "${all_logs}" | grep -q "Starting OpenEMR upgrade process\|Upgrade detected" && echo "1" || echo "0")
-    
+
     local upgrade_completed
     upgrade_completed=$(echo "${all_logs}" | grep -q "OpenEMR upgrade completed successfully" && echo "1" || echo "0")
-    
+
     # Also check for upgrade script execution messages
     local upgrade_scripts_run
     upgrade_scripts_run=$(echo "${all_logs}" | grep -q "Processing fsupgrade-.*\.sh upgrade script" && echo "1" || echo "0")
@@ -1502,7 +1506,7 @@ EOF
     local new_version
     new_version=$(docker exec "${container_name}" cat /var/www/localhost/htdocs/openemr/sites/default/docker-version 2>/dev/null || echo "0")
     log_info "Version after upgrade: ${new_version} (was ${old_version}, should be ${current_version})"
-    
+
     # Also verify the version files exist and match
     local root_version
     root_version=$(docker exec "${container_name}" cat /root/docker-version 2>/dev/null || echo "0")
@@ -1513,7 +1517,7 @@ EOF
     # Step 8: Verify OpenEMR is still configured and accessible
     local config_after_upgrade
     config_after_upgrade=$(check_openemr_configured "${container_name}")
-    
+
     local http_status
     http_status=$(curl -sL -o /dev/null -w "%{http_code}" "http://localhost:8088/interface/login/login.php" || echo "000")
 
@@ -1537,7 +1541,7 @@ EOF
     if [[ "${new_version}" = "${current_version}" ]] && [[ "${new_version}" != "${old_version}" ]]; then
         version_updated="1"
     fi
-    
+
     if [[ "${version_updated}" = "1" ]] && \
        [[ "${config_after_upgrade}" = "1" ]] && \
        [[ "${http_status}" = "200" ]]; then
