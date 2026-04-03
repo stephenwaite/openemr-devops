@@ -22,7 +22,7 @@ jobs:
   build:
     uses: ./.github/workflows/build-flex-core.yml
     with:
-      is_default_flex: true
+      is_default_flex: false
       alpine_version: "3.22"
       php_versions: '["8.2", "8.3", "8.4"]'
       php_default: "8.4"
