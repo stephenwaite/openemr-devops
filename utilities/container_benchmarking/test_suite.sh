@@ -733,7 +733,7 @@ EOF
         redis_config_path="/usr/local/etc/php/conf.d/99-redis-sessions.ini"
     else
         local php_abbr
-        php_abbr=$(docker exec "${container_name}" printenv PHP_VERSION_ABBR 2>/dev/null || echo "84")
+        php_abbr=$(docker exec "${container_name}" printenv PHP_VERSION_ABBR 2>/dev/null || echo "85")
         redis_config_path="/etc/php${php_abbr}/conf.d/99-redis-sessions.ini"
     fi
     local redis_configured
@@ -1173,7 +1173,7 @@ EOF
         php_ini_path="/usr/local/etc/php/php.ini"
     else
         local php_abbr
-        php_abbr=$(docker exec "${container_name}" printenv PHP_VERSION_ABBR 2>/dev/null || echo "84")
+        php_abbr=$(docker exec "${container_name}" printenv PHP_VERSION_ABBR 2>/dev/null || echo "85")
         php_ini_path="/etc/php${php_abbr}/php.ini"
     fi
     local opcache_disabled
