@@ -125,7 +125,7 @@ RUN apk add --no-cache \
     php${PHP_VERSION_ABBR}-pecl-apcu \
     php${PHP_VERSION_ABBR}-pecl-imagick \
     php${PHP_VERSION_ABBR}-phar \
-    "$(if [ "${PHP_VERSION}" = "8.2" ] || [ "${PHP_VERSION}" = "8.3" ] || [ "${PHP_VERSION}" = "8.4" ]; then echo php${PHP_VERSION_ABBR}-redis; else echo php${PHP_VERSION_ABBR}-pecl-redis; fi)" \    php${PHP_VERSION_ABBR}-session \
+    "$(if [ "${PHP_VERSION}" = "8.2" ] || [ "${PHP_VERSION}" = "8.3" ] || [ "${PHP_VERSION}" = "8.4" ]; then echo php${PHP_VERSION_ABBR}-redis; else echo php${PHP_VERSION_ABBR}-pecl-redis; fi)" \
     php${PHP_VERSION_ABBR}-simplexml \
     php${PHP_VERSION_ABBR}-soap \
     php${PHP_VERSION_ABBR}-sockets \
