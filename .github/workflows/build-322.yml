@@ -12,8 +12,6 @@ name: Flex 3.22 Dockers Build
 #
 # The is_default_flex environment variable is used to determine if this is the default flex image.
 #
-# THIS ALPINE 3.22 VERSION IS TAGGED AS openemr/openemr:flex (THE DEFAULT FLEX IMAGE SINCE is_default_flex IS TRUE)
-# (ENSURE TO MAKE THIS (is_default_flex) FALSE WHEN A NEW ALPINE VERSION TAKES OVER AS THE DEFAULT!)
 
 on:
   workflow_dispatch:
@@ -22,7 +20,7 @@ jobs:
   build:
     uses: ./.github/workflows/build-flex-core.yml
     with:
-      is_default_flex: true
+      is_default_flex: false
       alpine_version: "3.22"
       php_versions: '["8.2", "8.3", "8.4"]'
       php_default: "8.4"
