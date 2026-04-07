@@ -35,7 +35,7 @@ env:
 jobs:
   functionality-810:
     name: Functionality 8.1.0
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Set test args
@@ -52,10 +52,17 @@ jobs:
         run: |
           cd utilities/container_benchmarking
           ./test_functionality.sh 8.1.0 ${{ steps.args.outputs.args }}
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-810
+          path: utilities/container_benchmarking/test_results/
+          retention-days: 7
 
   functionality-binary:
     name: Functionality binary
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Set test args
@@ -72,10 +79,17 @@ jobs:
         run: |
           cd utilities/container_benchmarking
           ./test_functionality.sh binary ${{ steps.args.outputs.args }}
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-binary
+          path: utilities/container_benchmarking/test_results/
+          retention-days: 7
 
   functionality-flex:
     name: Functionality flex
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - name: Set test args
@@ -92,3 +106,10 @@ jobs:
         run: |
           cd utilities/container_benchmarking
           ./test_functionality.sh flex ${{ steps.args.outputs.args }}
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-flex
+          path: utilities/container_benchmarking/test_results/
+          retention-days: 7
