@@ -21,8 +21,42 @@
 # Environment Variables:
 #   The library uses various environment variables for database and OpenEMR
 #   configuration. See individual function documentation for details.
-# 
+#
 # ============================================================================
+
+# ============================================================================
+# PRIVILEGE-DROP HELPER
+# ============================================================================
+# Drop privileges to apache and exec the given command + args.
+# OpenEMR's RootCliGuard (openemr#12267) refuses root for any script
+# that loads interface/globals.php or runs through bin/console —
+# invoking those as root would create root-owned files the web
+# server later cannot read, the same failure mode the guard exists
+# to catch. Use this wrapper for any `php <openemr-script>`
+# invocation.
+#
+# Pass the command and its args as separate words, e.g.:
+#     run_php_as_apache php /path/to/script.php "key=${VAL}" "other=${X}"
+#
+# `su-exec` (alpine `su-exec` package, 14 KB static binary) runs the
+# command directly under apache's uid/gid + supplementary groups with
+# no intervening shell. Each arg reaches the target program verbatim
+# — values containing quotes, spaces, `$`, `;`, backticks, control
+# characters, or any other shell-special bytes are passed through
+# unparsed, which the equivalent `su -c "string"` form cannot do
+# without double-shell-parsing risk. su-exec also preserves the env
+# (HOME / PATH / MYSQL_* / OPENEMR_ENABLE_INSTALLER_AUTO etc.), so
+# no `-p` flag analog is needed.
+#
+# We chose su-exec over busybox `su` because busybox `su` rescans
+# its option flags across the entire arg list (not just up to USER),
+# so `-c`, `-f`, `-s` etc. appearing inside the inner command get
+# absorbed as su's own options — breaking argv-passthrough.
+# Util-linux `su` (`shadow` package) would also work but is larger
+# and alpine doesn't ship its `su` binary anyway.
+run_php_as_apache() {
+    su-exec apache "$@"
+}
 
 # ============================================================================
 # CONFIGURATION AND SETUP FUNCTIONS
@@ -194,7 +228,7 @@ resetOpenemr() {
 installOpenemr() {
     echo "Re-installing OpenEMR"
     cp /root/auto_configure.php /var/www/localhost/htdocs/
-    php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
+    run_php_as_apache php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
     rm -f /var/www/localhost/htdocs/auto_configure.php
 }
 
@@ -261,7 +295,7 @@ upgradeOpenEMR() {
     sed -i "1s@^@<?php \$_GET['site'] = 'default'; ?>@" /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
     
     # Execute the modified upgrade script
-    php -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
+    run_php_as_apache php -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
     
     # Clean up temporary file
     rm -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
@@ -445,12 +479,12 @@ changeEncodingCollation() {
     # Generate and execute ALTER DATABASE statement
     # Single quotes intentionally used for SQL syntax - variables expand on server side
     # shellcheck disable=SC2016,SC2312  # Pipeline return value is intentionally ignored
-    mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" -e 'SELECT concat("ALTER DATABASE `",TABLE_SCHEMA,"` CHARACTER SET = '"${1}"' COLLATE = '"${2}"';") as _sql FROM `information_schema`.`TABLES` where `TABLE_SCHEMA` like "'"${CUSTOM_DATABASE}"'" and `TABLE_TYPE`="BASE TABLE" group by `TABLE_SCHEMA`;' | grep -E '^ALTER' | mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" || true
+    mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" -e 'SELECT concat("ALTER DATABASE `",TABLE_SCHEMA,"` CHARACTER SET = '"${1}"' COLLATE = '"${2}"';") as _sql FROM `information_schema`.`TABLES` where `TABLE_SCHEMA` like "'"${CUSTOM_DATABASE}"'" and `TABLE_TYPE`="BASE TABLE" group by `TABLE_SCHEMA`;' | grep '^ALTER' | mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" || true
     
     # Generate and execute ALTER TABLE statements for all tables
     # Single quotes intentionally used for SQL syntax - variables expand on server side
     # shellcheck disable=SC2016,SC2312  # Pipeline return value is intentionally ignored
-    mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" -e 'SELECT concat("ALTER TABLE `",TABLE_SCHEMA,"`.`",TABLE_NAME,"` CONVERT TO CHARACTER SET '"${1}"' COLLATE '"${2}"';") as _sql FROM `information_schema`.`TABLES` where `TABLE_SCHEMA` like "'"${CUSTOM_DATABASE}"'" and `TABLE_TYPE`="BASE TABLE" group by `TABLE_SCHEMA`, `TABLE_NAME`;' | grep -E '^ALTER' | mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" || true
+    mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" -e 'SELECT concat("ALTER TABLE `",TABLE_SCHEMA,"`.`",TABLE_NAME,"` CONVERT TO CHARACTER SET '"${1}"' COLLATE '"${2}"';") as _sql FROM `information_schema`.`TABLES` where `TABLE_SCHEMA` like "'"${CUSTOM_DATABASE}"'" and `TABLE_TYPE`="BASE TABLE" group by `TABLE_SCHEMA`, `TABLE_NAME`;' | grep '^ALTER' | mariadb --skip-ssl -u "${CUSTOM_ROOT_USER}" --password="${MYSQL_ROOT_PASS}" -h "${MYSQL_HOST}" -P "${CUSTOM_PORT}" || true
 }
 
 # ============================================================================
@@ -645,7 +679,7 @@ importRandomPatients() {
     java -jar synthea-with-dependencies.jar --exporter.fhir.export false --exporter.ccda.export true --generate.only_alive_patients true -p "$1"
     sed -i "s@exit;@//exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     export OPENEMR_ENABLE_CCDA_IMPORT=1
-    php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr --isDev="$2"
+    run_php_as_apache php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr "--isDev=$2"
     sed -i "s@//exit;@exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     echo "Completed run for following number of random patients: ${1}"
 }
@@ -702,7 +736,17 @@ generateMultisiteBank() {
         rm -fr "/var/www/localhost/htdocs/openemr/sites/${run}"
         rm /tmp/setup_dump.sql
         echo "adding ${run} multisite"
-        php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass="${MYSQL_ROOT_PASS}" server="${MYSQL_HOST}" port="${CUSTOM_PORT}" loginhost=% login="${run}" pass="${run}" dbname="${run}" site="${run}" source_site_id=default clone_database=yes
+        run_php_as_apache php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php \
+            "rootpass=${MYSQL_ROOT_PASS}" \
+            "server=${MYSQL_HOST}" \
+            "port=${CUSTOM_PORT}" \
+            loginhost=% \
+            "login=${run}" \
+            "pass=${run}" \
+            "dbname=${run}" \
+            "site=${run}" \
+            source_site_id=default \
+            clone_database=yes
         chown -R apache "/var/www/localhost/htdocs/openemr/sites/${run}"
         # shellcheck disable=SC2312  # Pipeline return value is intentionally ignored
         find "/var/www/localhost/htdocs/openemr/sites/${run}" -type d -print0 | xargs -0 chmod 500 || true

@@ -24,14 +24,17 @@ use Symfony\Component\Process\Process;
 (new SingleCommandApplication())
     ->setName('changelog-pr')
     ->setDescription('Create CHANGELOG.md update PRs')
-    ->addOption('version', null, InputOption::VALUE_REQUIRED, 'Version string (e.g., 8.0.0.3)')
+    // `--release-version`, not `--version`: Symfony Console reserves `--version`
+    // as a global flag that prints the app name and exits 0 before the command
+    // runs, so `--version=8.0.0.3` would silently no-op.
+    ->addOption('release-version', null, InputOption::VALUE_REQUIRED, 'Version string (e.g., 8.0.0.3)')
     ->addOption('branches', null, InputOption::VALUE_REQUIRED, 'Comma-separated target branches')
     ->addOption('openemr-dir', null, InputOption::VALUE_REQUIRED, 'Path to openemr checkout')
     ->addOption('changelog-file', null, InputOption::VALUE_REQUIRED, 'Path to changelog entry file')
     ->addOption('repo', 'r', InputOption::VALUE_REQUIRED, 'GitHub repo', 'openemr/openemr')
     ->setCode(function (InputInterface $input, OutputInterface $output): int {
         /** @var string $version */
-        $version = $input->getOption('version');
+        $version = $input->getOption('release-version');
         /** @var string $openemrDir */
         $openemrDir = $input->getOption('openemr-dir');
         /** @var string $changelogFile */
@@ -41,7 +44,7 @@ use Symfony\Component\Process\Process;
         /** @var string $branchesRaw */
         $branchesRaw = $input->getOption('branches');
 
-        foreach (['version', 'branches', 'openemr-dir', 'changelog-file'] as $required) {
+        foreach (['release-version', 'branches', 'openemr-dir', 'changelog-file'] as $required) {
             if ($input->getOption($required) === null) {
                 $output->writeln("<error>--{$required} is required</error>");
                 return 1;
@@ -74,6 +77,16 @@ use Symfony\Component\Process\Process;
                 $output->writeln("PR already exists for <comment>{$prBranch}</comment>, skipping");
                 continue;
             }
+
+            // Fetch the target branch's ref. The release build checks out only
+            // the release branch (fetch-depth: 1), so sibling targets like
+            // master have no origin/<branch> ref yet. Use an explicit refspec
+            // so origin/<branch> is created regardless of the checkout's
+            // configured fetch refspec.
+            (new Process(
+                ['git', 'fetch', '--depth=1', 'origin', "{$branch}:refs/remotes/origin/{$branch}"],
+                $openemrDir,
+            ))->mustRun();
 
             // Create branch from target
             (new Process(['git', 'checkout', '-b', $prBranch, "origin/{$branch}"], $openemrDir))->mustRun();

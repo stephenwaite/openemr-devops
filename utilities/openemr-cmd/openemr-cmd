@@ -18,7 +18,7 @@ set -euo pipefail
 #################################################################################################
 
 # Increment the version when modify script
-VERSION="1.0.27"
+VERSION="1.0.42"
 
 # ============================================================================
 # WORKTREE STATE MANAGEMENT
@@ -57,6 +57,20 @@ wt_require_cmd() {
         if ! command -v "${cmd}" &>/dev/null; then wt_die "'${cmd}' is required but not found"; fi
     done
 }
+
+# realpath flag support differs by platform: GNU coreutils has -e/-m; the
+# BSD realpath on macOS has neither. BSD's bare realpath already resolves
+# symlinks and errors on a missing path (== GNU -e), and every -m call site
+# here resolves a path that already exists, so bare realpath is equivalent.
+# These are command arrays (not a wrapper function) so realpath stays an
+# external command — a function in an || condition trips shellcheck SC2310.
+if realpath --version >/dev/null 2>&1; then
+    OE_REALPATH_E=(realpath -e)
+    OE_REALPATH_M=(realpath -m)
+else
+    OE_REALPATH_E=(realpath)
+    OE_REALPATH_M=(realpath)
+fi
 
 wt_init_state() {
     [[ -f "${WT_STATE_FILE}" ]] || echo '{}' > "${WT_STATE_FILE}"
@@ -116,9 +130,118 @@ wt_slug() {
     echo "$1" | tr '/' '-' | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]'
 }
 
+# Validates that a worktree dir from state is safe to use for compose operations.
+# Guards against corrupted/tampered state by checking:
+#   1. dir resolves to a real path (realpath -e)
+#   2. it is within WORKTREE_PARENT
+#   3. it is a known git worktree of OPENEMR_ROOT
+wt_validate_dir() {
+    local dir=$1
+    local dir_real worktree_parent_real
+
+    # 1. Resolve to real path — fails if path does not exist
+    dir_real=$("${OE_REALPATH_E[@]}" "${dir}" 2>/dev/null) \
+        || wt_die "Worktree path does not exist or cannot be resolved: '${dir}'"
+
+    # 2. Ensure it is within WORKTREE_PARENT
+    worktree_parent_real=$("${OE_REALPATH_E[@]}" "${WORKTREE_PARENT}" 2>/dev/null) \
+        || wt_die "Cannot resolve WORKTREE_PARENT: '${WORKTREE_PARENT}'"
+    if [[ "${dir_real}" != "${worktree_parent_real}/"* ]]; then
+        wt_die "Worktree path '${dir_real}' is not within expected parent '${worktree_parent_real}'"
+    fi
+
+    # 3. Ensure it is a registered git worktree of OPENEMR_ROOT.
+    # Capture the listing first rather than piping into grep: under pipefail,
+    # 'grep -q' exits on first match and SIGPIPEs git mid-write, which git
+    # reports as failure (141) once its output exceeds the pipe buffer (many
+    # worktrees). A herestring avoids the pipe entirely.
+    local worktrees
+    worktrees=$(git -C "${OPENEMR_ROOT}" worktree list --porcelain 2>/dev/null) \
+        || wt_die "Cannot list git worktrees of '${OPENEMR_ROOT}'"
+    if ! grep -Fqx "worktree ${dir_real}" <<< "${worktrees}"; then
+        wt_die "Path '${dir_real}' is not a registered git worktree of '${OPENEMR_ROOT}'"
+    fi
+}
+
+# Non-fatal version of wt_validate_dir for use in listing context.
+# Returns 1 on failure instead of calling wt_die (which exits the script),
+# so a single bad state entry does not abort the entire list command.
+wt_validate_dir_safe() {
+    local dir=$1
+    local dir_real worktree_parent_real
+
+    dir_real=$("${OE_REALPATH_E[@]}" "${dir}" 2>/dev/null) || return 1
+
+    worktree_parent_real=$("${OE_REALPATH_E[@]}" "${WORKTREE_PARENT}" 2>/dev/null) || return 1
+    if [[ "${dir_real}" != "${worktree_parent_real}/"* ]]; then
+        return 1
+    fi
+
+    local worktrees
+    worktrees=$(git -C "${OPENEMR_ROOT}" worktree list --porcelain 2>/dev/null) || return 1
+    if ! grep -Fqx "worktree ${dir_real}" <<< "${worktrees}"; then
+        return 1
+    fi
+}
+
+# Resolve the openemr container ID for the managed worktree containing the
+# current working directory, or empty if cwd is not in a managed worktree.
+# Lets commands invoked from inside a worktree (e.g. a git hook firing
+# 'openemr-cmd prek run') dispatch to *that* worktree's container instead
+# of falling through to the script's default detection, which can pick the
+# wrong container when multiple worktree stacks are running concurrently.
+wt_resolve_container_from_cwd() {
+    local toplevel toplevel_real branch slug d_real
+    toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+    toplevel_real=$("${OE_REALPATH_M[@]}" "${toplevel}" 2>/dev/null) || return 0
+    [[ -f "${WT_STATE_FILE}" ]] || return 0
+
+    while IFS=$'\t' read -r b d; do
+        [[ -z "${b}" ]] && continue
+        d_real=$("${OE_REALPATH_M[@]}" "${d}" 2>/dev/null) || continue
+        if [[ "${d_real}" = "${toplevel_real}" ]]; then
+            branch="${b}"
+            break
+        fi
+    done < <(jq -r 'to_entries[] | [.key, .value.dir] | @tsv' "${WT_STATE_FILE}" 2>/dev/null || true)
+
+    [[ -n "${branch:-}" ]] || return 0
+    slug=$(wt_slug "${branch}")
+    # 2>/dev/null + '|| true': if the docker daemon is unavailable (laptop
+    # asleep, daemon not started) docker ps would error and propagate up
+    # through 'set -o pipefail', killing the script before the caller can
+    # report a clear "no running openemr container" message. Suppress the
+    # failure here so the caller treats an empty result the same as a clean
+    # "no container found" and emits its own user-facing error.
+    docker ps \
+        --filter "label=com.docker.compose.project=openemr-${slug}" \
+        --filter "label=com.docker.compose.service=openemr" \
+        --format "{{.ID}}" 2>/dev/null | head -n 1 || true
+}
+
 # ============================================================================
 # COMPOSE FILE GENERATORS
 # ============================================================================
+
+# Copy the primary repo's base .env into a worktree if (and only if):
+#   - source is a regular file (not a symlink — a symlinked source could
+#     point outside the primary, allowing a copy of arbitrary content),
+#   - dest does not exist as any kind of entry (regular file OR broken
+#     symlink — the broken-symlink case fails -e but cp would follow it
+#     and write at the link target, potentially outside the worktree).
+# Uses cp -p so a 0600 .env on the primary is not widened to 0644 by
+# the umask on the copy.
+wt_copy_base_env() {
+    local primary_root=$1 dest_dir=$2
+    local src="${primary_root}/.env"
+    local dst="${dest_dir}/.env"
+
+    [[ -f "${src}" && ! -L "${src}" ]] || return 0
+    [[ ! -e "${dst}" && ! -L "${dst}" ]] || return 0
+
+    cp -p "${src}" "${dst}"
+    wt_info "Copied base .env from primary repo"
+}
 
 # shellcheck disable=SC2004
 wt_write_env() {
@@ -164,9 +287,54 @@ wt_write_override() {
     local compose_subdir
     compose_subdir=$(wt_compose_subdir "${env}")
 
-    local lib_root env_root
-    lib_root=$(realpath "${OPENEMR_ROOT}/docker/library")
-    env_root=$(realpath "${OPENEMR_ROOT}/${compose_subdir}")
+    local lib_root env_root wt_root_real
+    # Resolve the worktree root once for bounds checking below
+    wt_root_real=$("${OE_REALPATH_E[@]}" "${dir}")
+
+    # Guard against nested symlinks that could resolve volume mount sources
+    # outside the worktree (e.g., docker/library -> /etc).
+    [[ -L "${dir}/docker/library" ]] && wt_die "Refusing: '${dir}/docker/library' is a symlink"
+    lib_root=$("${OE_REALPATH_E[@]}" "${dir}/docker/library")         || wt_die "Missing directory: '${dir}/docker/library'"
+    if [[ "${lib_root}/" != "${wt_root_real}/"* ]]; then
+        wt_die "Refusing: docker/library resolves outside worktree: '${lib_root}'"
+    fi
+
+    [[ -L "${dir}/${compose_subdir}" ]] && wt_die "Refusing: '${dir}/${compose_subdir}' is a symlink"
+    env_root=$("${OE_REALPATH_E[@]}" "${dir}/${compose_subdir}")         || wt_die "Missing directory: '${dir}/${compose_subdir}'"
+    if [[ "${env_root}/" != "${wt_root_real}/"* ]]; then
+        wt_die "Refusing: compose subdir resolves outside worktree: '${env_root}'"
+    fi
+
+    # For easy-redis: also guard php.ini since it is mounted directly into the container
+    if [[ "${env}" == "easy-redis" ]]; then
+        local php_ini="${dir}/${compose_subdir}/php.ini"
+        if [[ -e "${php_ini}" ]]; then
+            [[ -L "${php_ini}" ]] && wt_die "Refusing: '${php_ini}' is a symlink"
+            local php_ini_real
+            php_ini_real=$("${OE_REALPATH_E[@]}" "${php_ini}") \
+                || wt_die "Cannot resolve: '${php_ini}'"
+            if [[ "${php_ini_real}" != "${wt_root_real}" && "${php_ini_real}/" != "${wt_root_real}/"* ]]; then
+                wt_die "Refusing: php.ini resolves outside worktree: '${php_ini_real}'"
+            fi
+        fi
+    fi
+
+    # Resolve the primary repo's .git directory. The worktree's own .git is a
+    # text file containing 'gitdir: <primary>/.git/worktrees/<wt-dir-basename>',
+    # where <wt-dir-basename> is the basename of the worktree directory (in
+    # this script's naming, "openemr-wt-<slug>") -- not the branch slug alone.
+    # Without exposing that absolute path inside the container, any tool that
+    # shells out to git (npm postinstall hooks like husky, lint-staged, prek,
+    # composer scripts that read commit metadata, etc.) sees a broken pointer
+    # and fails. We bind-mount the primary's .git at the same absolute host
+    # path inside the container so the existing pointer resolves transparently.
+    local primary_root_real primary_git_real
+    primary_root_real=$("${OE_REALPATH_E[@]}" "${OPENEMR_ROOT}") \
+        || wt_die "Cannot resolve OPENEMR_ROOT: '${OPENEMR_ROOT}'"
+    [[ -L "${primary_root_real}/.git" ]] && wt_die "Refusing: '${primary_root_real}/.git' is a symlink"
+    primary_git_real=$("${OE_REALPATH_E[@]}" "${primary_root_real}/.git") \
+        || wt_die "Cannot resolve primary .git: '${primary_root_real}/.git'"
+    [[ -d "${primary_git_real}" ]] || wt_die "Primary .git is not a directory: '${primary_git_real}'"
 
     local override_file="${dir}/${compose_subdir}/docker-compose.override.yml"
 
@@ -188,8 +356,12 @@ volumes:
     name: openemr-${slug}_nodemodules
   vendordir:
     name: openemr-${slug}_vendor
+  phpstanvolume:
+    name: openemr-${slug}_phpstan
   ccdanodemodules:
     name: openemr-${slug}_ccdanodemodules
+  ccdanodemodules2:
+    name: openemr-${slug}_ccdanodemodules2
   logvolume:
     name: openemr-${slug}_logs
   couchdbvolume:
@@ -206,11 +378,34 @@ OVEOF
 
     # Core services (all envs).
     # Ports are handled via WT_* variables with defaults in the base compose.
-    # Override only needs: library bind-mount absolute paths (relative paths in
-    # base compose break when compose file is symlinked into a worktree directory).
+    # Override needs:
+    #   1. The primary repo's .git directory bind-mounted at the same absolute
+    #      host path inside the container, so the worktree's .git pointer file
+    #      resolves and host-installed git tooling (husky, lint-staged, prek,
+    #      etc.) sees a valid repo. Mounted RW because git writes refs,
+    #      indexes, packed objects, and the worktree-specific state in
+    #      <primary>/.git/worktrees/<slug>/.
+    #   2. Library bind-mount absolute paths (relative paths in the base
+    #      compose break when the compose file is loaded from a worktree
+    #      checkout that does not match the base compose's own directory).
     cat >> "${override_file}" <<OVEOF
 
 services:
+  openemr:
+    volumes:
+      - "${primary_git_real}:${primary_git_real}:rw"
+OVEOF
+
+    # easy-redis: php.ini is mounted directly into the openemr container.
+    # Append to the openemr service block emitted just above.
+    if [[ "${env}" == "easy-redis" ]]; then
+        cat >> "${override_file}" <<OVEOF
+      - "${env_root}/php.ini:/usr/local/etc/php/php.ini:ro"
+OVEOF
+    fi
+
+    cat >> "${override_file}" <<OVEOF
+
   mysql:
     volumes:
       - "${lib_root}/sql-ssl-certs-keys/easy/ca.pem:/etc/ssl/ca.pem:ro"
@@ -234,38 +429,23 @@ OVEOF
     # Redis-specific overrides.
     # The base compose uses hardcoded container_name which bypasses Docker project
     # namespacing — override with branch-scoped names so multiple worktrees coexist.
-    # Also patch relative ./redis/, ./sentinel/, and ./php.ini paths to absolute.
     if [[ "${env}" == "easy-redis" ]]; then
         cat >> "${override_file}" <<OVEOF
 
-  openemr:
-    volumes:
-      - "${env_root}/php.ini:/usr/local/etc/php/php.ini:ro"
-
   redis-master:
     container_name: openemr-${slug}-redis-master
-    volumes:
-      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   redis-replica-1:
     container_name: openemr-${slug}-redis-replica-1
-    volumes:
-      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   redis-replica-2:
     container_name: openemr-${slug}-redis-replica-2
-    volumes:
-      - "${env_root}/redis/redis.conf:/etc/redis/redis.conf"
 
   sentinel-1:
     container_name: openemr-${slug}-sentinel-1
-    volumes:
-      - "${env_root}/sentinel/sentinel-1.conf:/etc/redis/sentinel.conf"
 
   sentinel-2:
     container_name: openemr-${slug}-sentinel-2
-    volumes:
-      - "${env_root}/sentinel/sentinel-2.conf:/etc/redis/sentinel.conf"
 OVEOF
     fi
 }
@@ -277,14 +457,20 @@ wt_compose_cmd() {
     dir=$(wt_state_get "${branch}" dir)
     env=$(wt_state_get "${branch}" env)
     if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+    wt_validate_dir "${dir}"
     compose_subdir=$(wt_compose_subdir "${env}")
     check_docker_compose_install
     local slug
     slug=$(wt_slug "${branch}")
+    # Security note: docker-compose.yml is intentionally loaded from the
+    # worktree checkout so that compose changes on the branch are testable.
+    # This tool is designed for use on branches you own and trust — do not
+    # run worktree up/down/list against untrusted branches or PRs, as a
+    # malicious compose file could mount host paths or run arbitrary images.
     "${DOCKER_COMPOSE_CMD[@]}" \
         --env-file "${dir}/${compose_subdir}/.env" \
         -p "openemr-${slug}" \
-        -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
+        -f "${dir}/${compose_subdir}/docker-compose.yml" \
         -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
         "${@:2}"
 }
@@ -336,10 +522,37 @@ cmd_worktree_add() {
     fi
 
     wt_info "Setting up compose files (env=${env}, offset=${offset})"
+
+    # Guard against symlink attacks: a malicious branch could commit
+    # docker/ or docker/development-<env>/ as a symlink pointing outside
+    # the worktree. Refuse to proceed if either is a symlink.
+    if [[ -L "${dir}/docker" ]]; then
+        git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || true
+        wt_die "Refusing: '${dir}/docker' is a symlink in the checked-out branch"
+    fi
+    if [[ -L "${dir}/${compose_subdir}" ]]; then
+        git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || true
+        wt_die "Refusing: '${dir}/${compose_subdir}' is a symlink in the checked-out branch"
+    fi
+
     mkdir -p "${dir}/${compose_subdir}"
+
+    # Verify the compose subdir resolved within the worktree root (no traversal)
+    local wt_root_real compose_dir_real
+    wt_root_real=$("${OE_REALPATH_E[@]}" "${dir}")
+    compose_dir_real=$("${OE_REALPATH_M[@]}" "${dir}/${compose_subdir}")
+    if [[ "${compose_dir_real}/" != "${wt_root_real}/"* ]]; then
+        git -C "${OPENEMR_ROOT}" worktree remove --force "${dir}" 2>/dev/null || true
+        wt_die "Refusing: compose directory '${compose_dir_real}' is outside worktree root '${wt_root_real}'"
+    fi
 
     wt_write_env      "${dir}" "${branch}" "${offset}" "${env}"
     wt_write_override "${dir}" "${branch}" "${offset}" "${env}"
+
+    # The base-dir .env (e.g., OPENEMR__ENVIRONMENT=dev) is gitignored, so
+    # 'git worktree add' does not bring it across. Copy it from the primary so
+    # the new worktree's runtime environment matches.
+    wt_copy_base_env "${OPENEMR_ROOT}" "${dir}"
 
     wt_state_set "${branch}" "${offset}" "${dir}" "${env}"
 
@@ -381,6 +594,22 @@ cmd_worktree_remove() {
     local dir
     dir=$(wt_state_get "${branch}" dir)
     if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+
+    # If the dir is already gone (deleted out-of-band), skip the destructive
+    # steps and just clean up the state entry. Only the "missing" case is
+    # graceful here — for dirs that exist but fail validation (outside parent,
+    # not a registered worktree, etc.) keep the existing fatal behavior, since
+    # that might be in-progress user work we should not silently abandon.
+    if [[ ! -e "${dir}" ]]; then
+        local slug
+        slug=$(wt_slug "${branch}")
+        wt_state_remove "${branch}"
+        git -C "${OPENEMR_ROOT}" worktree prune 2>/dev/null || true
+        wt_info "Worktree dir was already gone; cleaned up state entry for '${branch}'."
+        wt_info "Note: docker resources (containers, volumes) for this stack may still exist."
+        wt_info "  Clean them manually: docker compose -p openemr-${slug} down -v"
+        return 0
+    fi
 
     echo "This will remove worktree '${branch}' at ${dir}."
     if ! ${purge}; then echo "  --keep-volumes: Docker volumes will be preserved."; fi
@@ -447,7 +676,7 @@ cmd_worktree_list() {
     wt_require_cmd jq
     wt_init_state
 
-    local main_branch jq_output status compose_subdir slug ps_output
+    local main_branch jq_output status compose_subdir slug ps_running ps_all
     main_branch=$(git -C "${OPENEMR_ROOT}" symbolic-ref --short HEAD 2>/dev/null || echo "detached")
 
     printf "%-30s %-12s %-8s %-10s %s\n" "BRANCH" "ENV" "OFFSET" "STATUS" "DIRECTORY"
@@ -466,28 +695,63 @@ cmd_worktree_list() {
     fi
 
     check_docker_compose_install
+    local stale_count=0 partial_count=0
     jq_output=$(jq -r 'to_entries[] | [.key, (.value.offset|tostring), .value.dir, .value.env] | @tsv' "${WT_STATE_FILE}")
     while IFS=$'\t' read -r branch offset dir env; do
-        status="stopped"
+        status="none"
         compose_subdir=$(wt_compose_subdir "${env}")
         slug=$(wt_slug "${branch}")
-        if [[ ! -d "${dir}" ]] || \
-           [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
-           [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
+        local validate_result=0
+        set +e
+        wt_validate_dir_safe "${dir}"
+        validate_result=$?
+        set -e
+        # Split between "dir gone" (prunable), "compose files gone but dir
+        # intact" (regen-able), and "validate failed" (prunable). Earlier
+        # versions lumped all three under "missing" and suggested prune for
+        # all of them, but prune only removes state entries that
+        # wt_validate_dir_safe rejects — the compose-files-missing case
+        # validates fine and stays put after prune.
+        if [[ ! -d "${dir}" ]]; then
             status="missing"
+            stale_count=$((stale_count + 1))
+        elif [[ ! -f "${dir}/${compose_subdir}/.env" ]] || \
+             [[ ! -f "${dir}/${compose_subdir}/docker-compose.override.yml" ]]; then
+            status="partial"
+            partial_count=$((partial_count + 1))
+        elif [[ "${validate_result}" -ne 0 ]]; then
+            status="invalid"
+            stale_count=$((stale_count + 1))
         else
-            ps_output=$("${DOCKER_COMPOSE_CMD[@]}" \
+            ps_running=$("${DOCKER_COMPOSE_CMD[@]}" \
                 --env-file "${dir}/${compose_subdir}/.env" \
                 -p "openemr-${slug}" \
-                -f "${OPENEMR_ROOT}/${compose_subdir}/docker-compose.yml" \
+                -f "${dir}/${compose_subdir}/docker-compose.yml" \
                 -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
                 ps --services --filter "status=running" 2>/dev/null) || true
-            if echo "${ps_output}" | grep -q openemr; then
+            if echo "${ps_running}" | grep -q openemr; then
                 status="running"
+            else
+                ps_all=$("${DOCKER_COMPOSE_CMD[@]}" \
+                    --env-file "${dir}/${compose_subdir}/.env" \
+                    -p "openemr-${slug}" \
+                    -f "${dir}/${compose_subdir}/docker-compose.yml" \
+                    -f "${dir}/${compose_subdir}/docker-compose.override.yml" \
+                    ps -aq 2>/dev/null) || true
+                if [[ -n "${ps_all}" ]]; then
+                    status="stopped"
+                fi
             fi
         fi
         printf "%-30s %-12s %-8s %-10s %s\n" "${branch}" "${env}" "${offset}" "${status}" "${dir}"
     done <<< "${jq_output}"
+
+    if [[ "${stale_count}" -gt 0 ]]; then
+        echo "(${stale_count} stale state entries — run \"openemr-cmd worktree prune\" to clean up; directories on disk are left intact)"
+    fi
+    if [[ "${partial_count}" -gt 0 ]]; then
+        echo "(${partial_count} entries have missing compose files — run \"openemr-cmd worktree regen <branch>\" to regenerate)"
+    fi
 }
 
 cmd_worktree_regen() {
@@ -507,25 +771,221 @@ cmd_worktree_regen() {
     wt_info "Done."
 }
 
+# shellcheck disable=SC2004
+cmd_worktree_start() {
+    local branch=${1:-}
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree start <branch>"; fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    wt_info "Starting stack for '${branch}'"
+    wt_compose_cmd "${branch}" start
+    local offset
+    offset=$(wt_state_get "${branch}" offset)
+    echo "OpenEMR running at http://localhost:$((8300 + ${offset}))"
+}
+
+cmd_worktree_stop() {
+    local branch=${1:-}
+    if [[ -z "${branch}" ]]; then wt_die "Usage: openemr-cmd worktree stop <branch>"; fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    wt_info "Stopping stack for '${branch}'"
+    wt_compose_cmd "${branch}" stop
+}
+
+# Runs an openemr-cmd command against the openemr container of a worktree's
+# compose project. Resolves the container by compose project/service label,
+# then re-invokes this script with -d <container_id> <args...>.
+cmd_worktree_exec() {
+    local branch=${1:-}
+    if [[ -z "${branch}" ]]; then
+        wt_die "Usage: openemr-cmd worktree exec <branch> <openemr-cmd-command> [args...]"
+    fi
+    shift
+    if [[ $# -eq 0 ]]; then
+        wt_die "Usage: openemr-cmd worktree exec <branch> <openemr-cmd-command> [args...]"
+    fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+    local dir
+    dir=$(wt_state_get "${branch}" dir)
+    if [[ -z "${dir}" ]]; then wt_die "No worktree found for branch '${branch}'"; fi
+    wt_validate_dir "${dir}"
+
+    local slug container_id
+    slug=$(wt_slug "${branch}")
+    container_id=$(docker ps \
+        --filter "label=com.docker.compose.project=openemr-${slug}" \
+        --filter "label=com.docker.compose.service=openemr" \
+        --format "{{.ID}}" | head -n 1)
+    if [[ -z "${container_id}" ]]; then
+        wt_die "OpenEMR container is not running for worktree '${branch}'. Run 'openemr-cmd worktree up ${branch}' or 'openemr-cmd worktree start ${branch}' first."
+    fi
+    exec "$0" -d "${container_id}" "$@"
+}
+
+# Switches an existing worktree's env (easy / easy-light / easy-redis).
+# Requires the stack to be fully torn down (status: none) before switching,
+# so the user makes the data decision (down vs down --keep-volumes) explicitly.
+cmd_worktree_set_env() {
+    local branch="" new_env=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -*) wt_die "Unknown option: $1" ;;
+            *)
+                if   [[ -z "${branch}"  ]]; then branch=$1
+                elif [[ -z "${new_env}" ]]; then new_env=$1
+                else wt_die "Unexpected argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    if [[ -z "${branch}" || -z "${new_env}" ]]; then
+        wt_die "Usage: openemr-cmd worktree set-env <branch> <easy|easy-light|easy-redis>"
+    fi
+    if ! [[ -f "${WT_STATE_FILE}" ]]; then wt_die "No worktrees found"; fi
+
+    wt_validate_env "${new_env}"
+
+    local current_env dir offset
+    current_env=$(wt_state_get "${branch}" env)
+    dir=$(wt_state_get "${branch}" dir)
+    offset=$(wt_state_get "${branch}" offset)
+    if [[ -z "${current_env}" || -z "${dir}" || -z "${offset}" ]]; then
+        wt_die "No worktree found for branch '${branch}'"
+    fi
+
+    if [[ "${current_env}" == "${new_env}" ]]; then
+        wt_info "Worktree '${branch}' is already on env '${new_env}'."
+        return 0
+    fi
+
+    wt_validate_dir "${dir}"
+
+    # The new env's compose subdir must exist on this branch (older branches
+    # may predate one of the env variants).
+    local new_compose_subdir
+    new_compose_subdir=$(wt_compose_subdir "${new_env}")
+    if [[ ! -f "${dir}/${new_compose_subdir}/docker-compose.yml" ]]; then
+        wt_die "New env's compose file not found: ${dir}/${new_compose_subdir}/docker-compose.yml. Update the branch to bring in the missing files."
+    fi
+
+    # Require status=none on the current env's stack before switching, so the
+    # user has explicitly chosen what to do with the old env's containers and
+    # volumes (worktree down vs worktree down --keep-volumes).
+    check_docker_compose_install
+    local current_compose_subdir slug ps_all
+    current_compose_subdir=$(wt_compose_subdir "${current_env}")
+    slug=$(wt_slug "${branch}")
+    if [[ -f "${dir}/${current_compose_subdir}/.env" ]] && \
+       [[ -f "${dir}/${current_compose_subdir}/docker-compose.override.yml" ]]; then
+        ps_all=$("${DOCKER_COMPOSE_CMD[@]}" \
+            --env-file "${dir}/${current_compose_subdir}/.env" \
+            -p "openemr-${slug}" \
+            -f "${dir}/${current_compose_subdir}/docker-compose.yml" \
+            -f "${dir}/${current_compose_subdir}/docker-compose.override.yml" \
+            ps -aq 2>/dev/null) || true
+        if [[ -n "${ps_all}" ]]; then
+            wt_die "Stack must be down before switching env. Run 'openemr-cmd worktree down ${branch}' first (use --keep-volumes to preserve data)."
+        fi
+    fi
+
+    wt_info "Switching '${branch}' env: ${current_env} -> ${new_env}"
+    wt_state_set      "${branch}" "${offset}" "${dir}" "${new_env}"
+    wt_write_env      "${dir}" "${branch}" "${offset}" "${new_env}"
+    wt_write_override "${dir}" "${branch}" "${offset}" "${new_env}"
+
+    echo ""
+    echo "Worktree '${branch}' switched to env '${new_env}'"
+    echo "Run 'openemr-cmd worktree up ${branch}' to start with the new env."
+}
+
+cmd_worktree_prune() {
+    local dry_run=false
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --dry-run) dry_run=true; shift ;;
+            -*) wt_die "Unknown option: $1" ;;
+            *)  wt_die "Unexpected argument: $1" ;;
+        esac
+    done
+
+    wt_require_cmd jq git realpath
+    wt_init_state
+
+    local state_content
+    state_content=$(cat "${WT_STATE_FILE}")
+    if [[ "${state_content}" == "{}" ]]; then
+        echo "(no stale entries)"
+        return 0
+    fi
+
+    local jq_output pruned=0 validate_result
+    jq_output=$(jq -r 'to_entries[] | [.key, .value.dir] | @tsv' "${WT_STATE_FILE}")
+    while IFS=$'\t' read -r branch dir; do
+        [[ -z "${branch}" ]] && continue
+        # set +e around wt_validate_dir_safe so a non-zero return (the
+        # whole point of the "safe" variant) does not abort under set -e.
+        set +e
+        wt_validate_dir_safe "${dir}"
+        validate_result=$?
+        set -e
+        if [[ "${validate_result}" -ne 0 ]]; then
+            if ${dry_run}; then
+                wt_info "Would prune stale entry: '${branch}' (${dir})"
+            else
+                wt_state_remove "${branch}"
+                wt_info "Pruned stale entry: '${branch}' (${dir})"
+            fi
+            pruned=$((pruned + 1))
+        fi
+    done <<< "${jq_output}"
+
+    # Keep git's internal worktree admin in sync with what we just removed from
+    # state. Without this, 'git worktree list --porcelain' may still report the
+    # removed worktrees as prunable, which can block a later 'worktree add' of
+    # the same branch.
+    if ! ${dry_run} && [[ "${pruned}" -gt 0 ]]; then
+        git -C "${OPENEMR_ROOT}" worktree prune 2>/dev/null || true
+    fi
+
+    if [[ "${pruned}" -eq 0 ]]; then
+        echo "(no stale entries)"
+    elif ${dry_run}; then
+        echo "Would prune ${pruned} stale worktree entries."
+    else
+        echo "Pruned ${pruned} stale worktree entries."
+    fi
+}
+
 cmd_worktree() {
     local action=${1:-}
     case "${action}" in
-        add)    cmd_worktree_add    "${@:2}" ;;
-        remove) cmd_worktree_remove "${@:2}" ;;
-        up)     cmd_worktree_up     "${@:2}" ;;
-        down)   cmd_worktree_down   "${@:2}" ;;
-        list)   cmd_worktree_list            ;;
-        regen)  cmd_worktree_regen  "${@:2}" ;;
+        add)     cmd_worktree_add     "${@:2}" ;;
+        remove)  cmd_worktree_remove  "${@:2}" ;;
+        up)      cmd_worktree_up      "${@:2}" ;;
+        down)    cmd_worktree_down    "${@:2}" ;;
+        start)   cmd_worktree_start   "${@:2}" ;;
+        stop)    cmd_worktree_stop    "${@:2}" ;;
+        exec)    cmd_worktree_exec    "${@:2}" ;;
+        list)    cmd_worktree_list             ;;
+        regen)   cmd_worktree_regen   "${@:2}" ;;
+        set-env) cmd_worktree_set_env "${@:2}" ;;
+        prune)   cmd_worktree_prune   "${@:2}" ;;
         *)
-            echo "Usage: openemr-cmd worktree <add|remove|up|down|list|regen> [options]"
+            echo "Usage: openemr-cmd worktree <add|remove|up|down|start|stop|exec|list|regen|set-env|prune> [options]"
             echo ""
             echo "  add <branch> [-b] [--env easy|easy-light|easy-redis] [--start]"
             echo "                            Create worktree (-b creates new branch, default env: easy)"
             echo "  remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
             echo "  up <branch>               Start Docker stack for worktree"
             echo "  down <branch> [--keep-volumes]  Stop Docker stack for worktree (volumes deleted by default)"
+            echo "  start <branch>            Start stopped containers for worktree (preserves data)"
+            echo "  stop <branch>             Stop running containers for worktree (preserves data)"
+            echo "  set-env <branch> <env>    Switch a worktree's env (easy|easy-light|easy-redis); stack must be down first"
+            echo "  exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
             echo "  list                      List all worktrees and status"
             echo "  regen <branch>            Regenerate override/env files"
+            echo "  prune [--dry-run]         Remove state entries whose worktree dir is gone or invalid"
             echo "  wt                        Alias for worktree"
             exit 1
             ;;
@@ -536,10 +996,158 @@ cmd_worktree() {
 # END OF WORKTREE STATE MANAGEMENT
 # ============================================================================
 
+# ============================================================================
+# PRE-COMMIT HOOK INSTALLATION
+# ============================================================================
+# Writes host-side git hooks that dispatch into the container's pre-commit
+# (exposed as 'prek' via openemr-cmd). Lets developers commit from the host
+# without installing PHP, Node, Python, codespell, or pre-commit locally;
+# git fires the shim, which calls 'openemr-cmd prek run ...', which docker
+# execs into the right container (cwd-aware, so worktrees route correctly).
+
+PREK_HOOK_MARKER="__openemr_cmd_prek_hook__"
+
+# Compute the git hooks directory for the current repo (or worktree). Linked
+# worktrees share hooks via gitcommondir, so installing once covers all
+# worktrees of a primary. Echoes the absolute path on success.
+prek_hooks_dir() {
+    local git_common_dir
+    git_common_dir=$(git rev-parse --git-common-dir 2>/dev/null) \
+        || { echo "Error: not in a git repository (run from inside the openemr checkout)" >&2 ; return 1 ; }
+    # --git-common-dir can be relative; resolve to absolute
+    if [[ "${git_common_dir}" != /* ]]; then
+        git_common_dir="$(pwd)/${git_common_dir}"
+    fi
+    git_common_dir=$("${OE_REALPATH_M[@]}" "${git_common_dir}") \
+        || { echo "Error: cannot resolve git-common-dir" >&2 ; return 1 ; }
+    echo "${git_common_dir}/hooks"
+}
+
+# Writes a hook shim to <hooks_dir>/<stage>. Refuses to overwrite an existing
+# non-managed hook unless --force was passed. The shim invokes openemr-cmd
+# via the absolute path resolved at install time, since git fires hooks with
+# a reduced PATH (especially from GUI clients) that may not include the user's
+# bin dir.
+prek_write_hook() {
+    local target=$1 stage=$2 force=$3 cmd_path=$4
+    if [[ -e "${target}" ]] && ! grep -q "${PREK_HOOK_MARKER}" "${target}" 2>/dev/null; then
+        if [[ "${force}" != "true" ]]; then
+            echo "Error: ${target} exists and is not openemr-cmd-managed." >&2
+            echo "Use 'openemr-cmd prek-install --force' to back it up and overwrite." >&2
+            return 1
+        fi
+        # mktemp for the backup name: 'date +%s' is seconds-resolution, so
+        # rapid re-runs of 'prek-install --force' would clobber each other's
+        # backups. mktemp's collision-free suffix avoids that. The empty file
+        # mktemp creates is immediately overwritten by mv.
+        local backup
+        backup=$(mktemp "${target}.bak.XXXXXXXX") \
+            || { echo "Error: cannot create backup file for ${target}" >&2 ; return 1 ; }
+        mv "${target}" "${backup}"
+        echo "  Backed up existing hook to ${backup}"
+    fi
+
+    case "${stage}" in
+        commit-msg)
+            cat > "${target}" <<HOOKEOF
+#!/bin/sh
+# openemr-cmd-managed commit-msg hook -- do not edit by hand
+# ${PREK_HOOK_MARKER}
+exec "${cmd_path}" prek run --hook-stage commit-msg --commit-msg-filename "\$1"
+HOOKEOF
+            ;;
+        *)
+            cat > "${target}" <<HOOKEOF
+#!/bin/sh
+# openemr-cmd-managed pre-commit hook -- do not edit by hand
+# ${PREK_HOOK_MARKER}
+exec "${cmd_path}" prek run --hook-stage pre-commit
+HOOKEOF
+            ;;
+    esac
+    chmod +x "${target}"
+}
+
+cmd_prek_install() {
+    local force=false
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --force) force=true ; shift ;;
+            -*)      echo "Unknown option: $1" >&2 ; exit 1 ;;
+            *)       echo "Unexpected argument: $1" >&2 ; exit 1 ;;
+        esac
+    done
+
+    wt_require_cmd git realpath
+    # Bare assignments below rely on 'set -euo pipefail' (top of script):
+    # if prek_hooks_dir or prek_write_hook returns non-zero, set -e exits
+    # the script. Avoids SC2310 (using '||' or 'if !' would disable set -e
+    # inside the called function, which we don't want for the helpers).
+    local hooks_dir
+    hooks_dir=$(prek_hooks_dir)
+    [[ -d "${hooks_dir}" ]] || mkdir -p "${hooks_dir}"
+
+    # Resolve absolute path to this openemr-cmd script so the hook shim
+    # doesn't depend on git's runtime PATH (which is reduced under many
+    # git clients, especially GUI ones, and may not include ~/bin or
+    # ~/.local/bin where users often install openemr-cmd). Prefer $0
+    # (the path the user invoked) -- this matches what's actually running
+    # right now. Fall back to PATH lookup if $0 cannot be canonicalized.
+    local cmd_path
+    cmd_path=$("${OE_REALPATH_E[@]}" "$0" 2>/dev/null) \
+        || cmd_path=$(command -v openemr-cmd 2>/dev/null) \
+        || { echo "Error: cannot resolve absolute path to openemr-cmd; pass it explicitly?" >&2 ; exit 1 ; }
+
+    prek_write_hook "${hooks_dir}/pre-commit" pre-commit "${force}" "${cmd_path}"
+    prek_write_hook "${hooks_dir}/commit-msg" commit-msg "${force}" "${cmd_path}"
+
+    echo "Installed openemr-cmd-managed git hooks in ${hooks_dir}/"
+    echo "  pre-commit  -> openemr-cmd prek run --hook-stage pre-commit"
+    echo "  commit-msg  -> openemr-cmd prek run --hook-stage commit-msg --commit-msg-filename \$1"
+    echo ""
+    echo "Linked worktrees share these hooks via gitcommondir, so this install"
+    echo "covers all worktrees of this primary. To remove: openemr-cmd prek-uninstall."
+}
+
+cmd_prek_uninstall() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -*) echo "Unknown option: $1" >&2 ; exit 1 ;;
+            *)  echo "Unexpected argument: $1" >&2 ; exit 1 ;;
+        esac
+    done
+
+    wt_require_cmd git realpath
+    # Bare assignment relies on 'set -euo pipefail'; see cmd_prek_install.
+    local hooks_dir
+    hooks_dir=$(prek_hooks_dir)
+
+    local removed=0 skipped=0 hook target
+    for hook in pre-commit commit-msg; do
+        target="${hooks_dir}/${hook}"
+        if [[ -f "${target}" ]] && grep -q "${PREK_HOOK_MARKER}" "${target}" 2>/dev/null; then
+            rm "${target}"
+            echo "Removed ${target}"
+            removed=$((removed+1))
+        elif [[ -f "${target}" ]]; then
+            echo "Skipped ${target} (not openemr-cmd-managed; remove manually if intended)" >&2
+            skipped=$((skipped+1))
+        fi
+    done
+
+    if [[ ${removed} -eq 0 && ${skipped} -eq 0 ]]; then
+        echo "No openemr-cmd-managed hooks found in ${hooks_dir}/"
+    fi
+}
+
+# ============================================================================
+# END OF PRE-COMMIT HOOK INSTALLATION
+# ============================================================================
+
 # If the docker is snap or non-snap docker
 # Setting the container names accordingly
 get_container_names() {
-    INSANE_DEV_DOCKER="openemr-8-4[_\-]1"
+    INSANE_DEV_DOCKER="openemr-8-5[_\-]1"
     EASY_DEV_DOCKER="openemr[_\-]1"
     COUCHDB_DOCKER="couchdb[_\-]1"
     MARIADB_DOCKER="mysql[_\-]1"
@@ -875,7 +1483,8 @@ docker-pull-image(){
     while IFS= read -r SERVICE; do
         [[ -z "${SERVICE}" ]] && continue
         read -r -e -p "Do you wish to pull ${SERVICE} ? [Y/n] " RESP </dev/tty
-        if [[ -z "${RESP}" || "${RESP,,}" = y ]]; then
+        # [Yy] glob keeps this bash 3.2 (system macOS bash) compatible; ${var,,} is bash 4+.
+        if [[ -z "${RESP}" || "${RESP}" = [Yy] ]]; then
             run_docker_compose -f "${COMPOSE_FILE}" pull "${SERVICE}"
         else
             echo "Skipping ${SERVICE}"
@@ -979,6 +1588,19 @@ if [[ "${FIRST_ARG}" = 'worktree' || "${FIRST_ARG}" = 'wt' ]]; then
     exit 0
 fi
 
+# prek-install / prek-uninstall manage host-side git hooks and don't need
+# a running container; short-circuit before the docker checks below.
+if [[ "${FIRST_ARG}" = 'prek-install' || "${FIRST_ARG}" = 'pi' ]]; then
+    shift
+    cmd_prek_install "$@"
+    exit 0
+fi
+if [[ "${FIRST_ARG}" = 'prek-uninstall' || "${FIRST_ARG}" = 'pu' ]]; then
+    shift
+    cmd_prek_uninstall "$@"
+    exit 0
+fi
+
 # Confirm the docker install or not.
 DOCKER_CODE=16
 if ! command -v docker &>/dev/null; then
@@ -1002,8 +1624,13 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  worktree remove <branch> [--keep-volumes] Remove worktree (volumes deleted by default)"
     echo "  worktree up <branch>               Start Docker stack for a worktree"
     echo "  worktree down <branch> [--keep-volumes]  Stop Docker stack (volumes deleted by default)"
+    echo "  worktree start <branch>            Start stopped containers for worktree (preserves data)"
+    echo "  worktree stop <branch>             Stop running containers for worktree (preserves data)"
+    echo "  worktree set-env <branch> <env>    Switch a worktree's env (easy|easy-light|easy-redis); stack must be down first"
+    echo "  worktree exec <branch> <cmd> [args...]   Run an openemr-cmd command against the worktree's openemr container"
     echo "  worktree list                      List all worktrees and their running status"
     echo "  worktree regen <branch>            Regenerate override/env files for a worktree"
+    echo "  worktree prune [--dry-run]         Remove state entries whose worktree dir is gone or invalid"
     echo "  wt                                 Alias for worktree"
     echo 'docker-management:'
     echo "  up                                 Execute: docker-compose up -d"
@@ -1016,6 +1643,15 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  dl, docker-log                     To check docker log"
     echo "  dn, docker-names                   To check docker the running docker names"
     echo "  dpi, docker-pull-image             Prompt to pull docker image"
+    echo 'pre-commit-management:'
+    echo "  prek [args...]                     (runs in container) Passthrough to in-container pre-commit"
+    echo "                                     e.g. 'prek run --all-files', 'prek run phpstan', 'prek install-hooks'"
+    echo "  pi, prek-install [--force]         (host-only; runs on host filesystem, no container needed)"
+    echo "                                     Install git hooks routing 'git commit' into in-container prek"
+    echo "                                     Do NOT wrap with 'worktree exec' or '-d <container>'"
+    echo "  pu, prek-uninstall                 (host-only; runs on host filesystem, no container needed)"
+    echo "                                     Remove openemr-cmd-managed git hooks (leaves others alone)"
+    echo "                                     Do NOT wrap with 'worktree exec' or '-d <container>'"
     echo 'php-management:'
     echo "  bt, build-themes                   Make changes to any files on your local file system"
     echo "  pl, php-log                        To check PHP error logs"
@@ -1030,6 +1666,15 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  rp, rector-process                 To process Rector changes"
     echo "  pst, phpstan                       To run PHPStan diagnose and analyze"
     echo "  psg, phpstan-generate              To run PHPStan regenerate baseline"
+    echo "  pgr, phpstan-generate-reset        To wipe and regenerate PHPStan baseline from scratch"
+    echo "  cps, codespell                     To run codespell (composer codespell)"
+    echo "  ccc, conventional-commits-check    To validate conventional commit messages"
+    echo "  crc, require-checker               To run composer-require-checker"
+    echo "  cv, composer-validate              To validate composer.json (strict)"
+    echo "  cn, composer-normalize             To check composer.json normalization (dry-run)"
+    echo "  cnf, composer-normalize-fix        To apply composer.json normalization"
+    echo "  cck, composer-checks               To run composer checks (validate + normalize dry-run)"
+    echo "  cq, code-quality                   To run full composer code-quality suite (all pre-commit PHP tools)"
     echo "  xl, xdebug-log                     To check xdebug log"
     echo "  lxp, list-xdebug-profiles          To list xdebug profiles"
     echo 'test-management:'
@@ -1043,6 +1688,9 @@ if [[ $# -eq 0 || "${FIRST_ARG}" = '--help' || "${FIRST_ARG}" = '-h' ]]; then
     echo "  vt, validators-test                To run validators testing"
     echo "  ct, controllers-test               To run controllers testing"
     echo "  ctt, common-test                   To run common testing"
+    echo "  pit, phpunit-isolated              To run PHP isolated tests (no DB required)"
+    echo "  utf, update-twig-fixtures          Regenerate Twig render-test fixtures (mutates fixture files; review diff before committing)"
+    echo "  ulff, update-layout-field-fixtures Regenerate layout field render-test fixtures (mutates fixture files; review diff before committing)"
     echo 'sweep-management:'
     echo "  cs, clean-sweep                    To run the entire dev tool suite"
     echo "  cst, clean-sweep-tests             To run only all the automated tests"
@@ -1321,6 +1969,33 @@ case "${FIRST_ARG}" in
     psg)
         run_devtools_in_docker "${CONTAINER_ID}" phpstan-generate
         ;;
+    pgr|phpstan-generate-reset)
+        run_devtools_in_docker "${CONTAINER_ID}" phpstan-generate-reset
+        ;;
+    cps|codespell)
+        run_devtools_in_docker "${CONTAINER_ID}" codespell
+        ;;
+    ccc|conventional-commits-check)
+        run_devtools_in_docker "${CONTAINER_ID}" conventional-commits-check
+        ;;
+    crc|require-checker)
+        run_devtools_in_docker "${CONTAINER_ID}" require-checker
+        ;;
+    cv|composer-validate)
+        run_devtools_in_docker "${CONTAINER_ID}" composer-validate
+        ;;
+    cn|composer-normalize)
+        run_devtools_in_docker "${CONTAINER_ID}" composer-normalize
+        ;;
+    cnf|composer-normalize-fix)
+        run_devtools_in_docker "${CONTAINER_ID}" composer-normalize-fix
+        ;;
+    cck|composer-checks)
+        run_devtools_in_docker "${CONTAINER_ID}" composer-checks
+        ;;
+    cq|code-quality)
+        run_devtools_in_docker "${CONTAINER_ID}" code-quality
+        ;;
     ut)
         run_devtools_in_docker "${CONTAINER_ID}" unit-test
         ;;
@@ -1350,6 +2025,15 @@ case "${FIRST_ARG}" in
         ;;
     ctt)
         run_devtools_in_docker "${CONTAINER_ID}" common-test
+        ;;
+    pit|phpunit-isolated)
+        run_devtools_in_docker "${CONTAINER_ID}" phpunit-isolated
+        ;;
+    utf|update-twig-fixtures)
+        run_devtools_in_docker "${CONTAINER_ID}" update-twig-fixtures
+        ;;
+    ulff|update-layout-field-fixtures)
+        run_devtools_in_docker "${CONTAINER_ID}" update-layout-field-fixtures
         ;;
     cs)
         run_devtools_in_docker "${CONTAINER_ID}" clean-sweep
@@ -1454,6 +2138,91 @@ case "${FIRST_ARG}" in
         ;;
     lm)
         run_devtools_in_docker "${CONTAINER_ID}" list-multisites
+        ;;
+    pi|prek-install|pu|prek-uninstall)
+        # Safeguard: these are host-side commands and have an early-dispatch
+        # short-circuit near the worktree dispatch (well before the '-d'
+        # parsing and container detection). Hitting this case branch means
+        # the early dispatch was bypassed -- which happens when the command
+        # was invoked via 'openemr-cmd -d <container> pi' or, transitively,
+        # via 'openemr-cmd worktree exec <branch> pi'. Both forms try to
+        # route a host-side command through a container; that is never
+        # correct for these commands (they manipulate host-side .git/hooks/).
+        echo "Error: '${FIRST_ARG}' is a host-only command (writes git hooks to host filesystem)." >&2
+        echo "       It must not be wrapped with '-d <container>' or 'worktree exec'." >&2
+        echo "       Run directly on the host: openemr-cmd ${FIRST_ARG}" >&2
+        exit 1
+        ;;
+    prek)
+        # Run the pre-commit framework inside the openemr container at the
+        # openemr workdir. The container ships the Python 'pre-commit' tool
+        # via apk; we expose it as 'prek' here so the host-facing CLI
+        # ('prek run' if installed on host) and the docker-facing CLI
+        # ('openemr-cmd prek run') share a name. Behavior is equivalent —
+        # both read the same .pre-commit-config.yaml.
+        #
+        # All args are passed through unchanged: `openemr-cmd prek run`,
+        # `openemr-cmd prek run --all-files`, `openemr-cmd prek install-hooks`,
+        # `openemr-cmd prek run phpstan`, etc. The container's git operations
+        # work because of the .git mount in worktree overrides and the
+        # system-wide safe.directory config.
+        #
+        # cwd-aware routing: a git hook firing from inside worktree foo must
+        # dispatch to foo's container, not to whatever worktree container
+        # happens to be running (the default fallback). wt_resolve_container_from_cwd
+        # checks if cwd matches a managed-worktree entry and returns that
+        # specific container; falls back to CONTAINER_ID otherwise.
+        #
+        # actionlint-docker workaround: .pre-commit-config.yaml uses the
+        # 'actionlint-docker' hook, which spawns docker run rhysd/actionlint
+        # — impossible from inside the container (no docker socket). We
+        # generate an in-container config copy at invocation time, swapping
+        # 'actionlint-docker' for 'actionlint-system' (apk-installed actionlint
+        # binary), and run pre-commit against that copy via --config. Host
+        # invocation of pre-commit/prek is unaffected; it reads the unmodified
+        # .pre-commit-config.yaml as before.
+        prek_target_id=$(wt_resolve_container_from_cwd)
+        [[ -n "${prek_target_id}" ]] || prek_target_id="${CONTAINER_ID}"
+        if [[ -z "${prek_target_id}" ]]; then
+            echo "Error: no running openemr container found. Start the stack first ('openemr-cmd up' or 'openemr-cmd worktree up <branch>')." >&2
+            exit 1
+        fi
+        docker exec -w /var/www/localhost/htdocs/openemr -i "${prek_target_id}" \
+            sh -c '
+                # Substitute actionlint-docker -> actionlint-system ONLY for the
+                # subcommands that actually consume .pre-commit-config.yaml to
+                # execute hooks: run + install-hooks. For everything else
+                # (--version, --help, autoupdate, clean, sample-config, etc.)
+                # pass through without touching the config -- those either
+                # don ot read the config at all, or modify it in place (where
+                # operating on a temp copy would be wrong).
+                #
+                # In Python pre-commit, --config is a *per-subcommand* option
+                # (e.g. `pre-commit run --config FILE`), NOT a top-level one.
+                # So the --config flag must come AFTER the subcommand name.
+                case "$1" in
+                    run|install-hooks)
+                        if [ -f .pre-commit-config.yaml ]; then
+                            # mktemp for the substituted config: a fixed /tmp
+                            # path would race if two prek invocations run
+                            # concurrently in the same container. Template
+                            # ends in XXXXXX with no suffix -- BusyBox mktemp
+                            # (Alpine) requires the X-group at the end.
+                            cfg=$(mktemp /tmp/openemr-cmd-pre-commit-config.XXXXXX) \
+                                || { echo "prek: failed to create temp config" >&2 ; exit 1 ; }
+                            trap "rm -f \"${cfg}\"" EXIT INT TERM
+                            sed "s/actionlint-docker/actionlint-system/g" .pre-commit-config.yaml > "${cfg}"
+                            subcmd="$1"; shift
+                            pre-commit "$subcmd" --config "${cfg}" "$@"
+                        else
+                            exec pre-commit "$@"
+                        fi
+                        ;;
+                    *)
+                        exec pre-commit "$@"
+                        ;;
+                esac
+            ' sh "$@"
         ;;
     *)
         # Default case: assume it's a devtools command

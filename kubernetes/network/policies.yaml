@@ -1,0 +1,135 @@
+# Default deny all ingress traffic in the default namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+# OpenEMR: allow ingress from anywhere on http/https (user-facing)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-openemr-ingress
+spec:
+  podSelector:
+    matchLabels:
+      name: openemr
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - port: 80
+    - port: 443
+---
+# MySQL: allow ingress from OpenEMR and phpMyAdmin on 3306,
+# and from other MySQL pods for replication
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mysql-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: mysql
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          name: openemr
+    - podSelector:
+        matchLabels:
+          name: phpmyadmin
+    - podSelector:
+        matchLabels:
+          app: mysql
+    ports:
+    - port: 3306
+---
+# Redis: allow ingress from OpenEMR on 6379,
+# from sentinel on 6379, and from other Redis pods for replication
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          name: openemr
+    - podSelector:
+        matchLabels:
+          app: sentinel
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - port: 6379
+---
+# Sentinel: allow ingress from OpenEMR on 26379,
+# from other sentinels, and from Redis pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-sentinel-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: sentinel
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          name: openemr
+    - podSelector:
+        matchLabels:
+          app: sentinel
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - port: 26379
+---
+# phpMyAdmin: deny all pod-to-pod ingress.
+# Access is only via kubectl port-forward, which bypasses NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-phpmyadmin-ingress
+spec:
+  podSelector:
+    matchLabels:
+      name: phpmyadmin
+  policyTypes:
+  - Ingress
+---
+# NFS provisioner: allow all ingress.
+# NFS mounts originate from kubelet on nodes, not from pods, so
+# pod-selector-based restrictions would block legitimate mounts.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-nfs-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: nfs-provisioner
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - port: 2049
+    - port: 111
+    - port: 20048

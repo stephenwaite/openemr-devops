@@ -119,6 +119,66 @@ case "${PCOV_ON,,}" in
     *) PCOV_ON=false ;;
 esac
 
+# Disable git's CVE-2022-24765 ownership check for the bind-mounted
+# OpenEMR working tree. When the host UID does not match the container's
+# apache UID (common on macOS Docker Desktop, WSL2, GitHub Codespaces),
+# git refuses to operate without this. Without it, in-container git
+# tooling fails: npm postinstall hooks (husky, lint-staged), prek,
+# composer scripts that read commit metadata, and openemr-cmd commands
+# that shell out to git.
+#
+# Runs unconditionally on every container start, before any code path
+# that might invoke git. Scoped to DEVELOPER_TOOLS=yes only: production
+# images COPY the source rather than bind-mount it, so .git is owned by
+# the container's build user and the ownership check passes naturally.
+#
+# --replace-all (vs --add) so /etc/gitconfig stays stable across restarts;
+# specific path (vs '*') keeps the ownership check intact for any other
+# repos that might exist in the container.
+if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
+    git config --system --replace-all safe.directory /var/www/localhost/htdocs/openemr
+fi
+
+# Install development-only Alpine packages that openemr-cmd subcommands and
+# the e2e test runner depend on:
+#   chromium / chromium-chromedriver  for Symfony Panther (e2e tests)
+#   py3-codespell                     for openemr-cmd cps / cq (codespell)
+#   pre-commit                        for openemr-cmd prek -- the in-container
+#                                     tool is Python's 'pre-commit'; openemr-cmd
+#                                     exposes it under the label 'prek' so the
+#                                     host-side and docker-side CLIs share a name
+#   actionlint                        for the actionlint-system pre-commit hook;
+#                                     openemr-cmd prek substitutes actionlint-docker
+#                                     -> actionlint-system at invocation time
+#                                     because DinD is not available from inside
+#                                     this container
+#   php${PHP_VERSION_ABBR}-pdo_sqlite for in-process SQLite via Doctrine DBAL.
+#                                     HolidayServiceTest in the isolated test
+#                                     suite builds an in-memory ':memory:'
+#                                     SQLite connection in setUp; without
+#                                     pdo_sqlite the whole class fatals with
+#                                     'could not find driver' at driver init.
+#
+# Runs at top of script (not inside NEED_COMPOSER_BUILD) because apk packages
+# live in the container's writable rootfs, not in any named volume. A
+# 'docker compose down --keep-volumes && up' recreates the rootfs but
+# preserves vendor (NEED_COMPOSER_BUILD=false), which would otherwise leave
+# these binaries missing in the new container.
+#
+# Idempotent: 'apk info -e' guards short-circuit when everything is already
+# installed. Tolerant of network failures.
+if [[ "${DEVELOPER_TOOLS}" = "yes" ]] && {
+       ! apk info -e chromium                                   >/dev/null 2>&1 || \
+       ! apk info -e chromium-chromedriver                      >/dev/null 2>&1 || \
+       ! apk info -e py3-codespell                              >/dev/null 2>&1 || \
+       ! apk info -e pre-commit                                 >/dev/null 2>&1 || \
+       ! apk info -e actionlint                                 >/dev/null 2>&1 || \
+       ! apk info -e "php${PHP_VERSION_ABBR?}-pdo_sqlite"        >/dev/null 2>&1; }; then
+    apk add --no-cache chromium chromium-chromedriver py3-codespell pre-commit actionlint \
+        "php${PHP_VERSION_ABBR?}-pdo_sqlite" \
+        || echo "dev apk packages: install failed; some openemr-cmd subcommands may be unavailable" >&2
+fi
+
 auto_setup() {
     prepareVariables
 
@@ -135,6 +195,11 @@ auto_setup() {
     # This enables opcache file caching for faster PHP execution during installation
     TMP_FILE_CACHE_LOCATION="/tmp/php-file-cache"
     mkdir -p "${TMP_FILE_CACHE_LOCATION}"
+    # Apache is the only writer (we drop to apache below via su -p);
+    # chown and restrict the dir to that user. The dir is rm -rf'd at
+    # the end of this entrypoint either way.
+    chown apache:apache "${TMP_FILE_CACHE_LOCATION}"
+    chmod 0700 "${TMP_FILE_CACHE_LOCATION}"
 
     # Create auto_configure.ini to leverage opcache for faster installation
     {
@@ -150,8 +215,20 @@ auto_setup() {
     # Update heartbeat right before long-running PHP command
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
 
-    # Run auto_configure with optimized PHP settings
-    php /var/www/localhost/htdocs/auto_configure.php -c auto_configure.ini -f "${CONFIGURATION}" || return 1
+    # Run auto_configure with optimized PHP settings.
+    # Drop privileges to apache: auto_configure.php goes through the
+    # Installer class, which openemr#12267's RootCliGuard refuses to
+    # run as root. `su-exec` exec's the program directly with no
+    # intervening shell, preserving env and passing each arg
+    # verbatim — see run_php_as_apache in devtoolsLibrary.source for
+    # the rationale on using su-exec instead of busybox su.
+    # The Dockerfile sets auto_configure.php to mode 000 as a safety
+    # measure (root can read regardless); briefly chmod to 0644 so
+    # apache can read it. The file is rm'd at the end of this
+    # entrypoint either way.
+    chmod 0644 /var/www/localhost/htdocs/auto_configure.php
+    su-exec apache \
+        php /var/www/localhost/htdocs/auto_configure.php -c auto_configure.ini -f "${CONFIGURATION}" || return 1
 
     # Update heartbeat after PHP execution completes
     [[ "${AUTHORITY}" = "yes" ]] && update_leader_heartbeat
@@ -288,6 +365,7 @@ is_configured() {
 
 AUTHORITY=yes
 OPERATOR=yes
+SWARM_WAIT_DEFERRED=no
 
 # Kubernetes-specific role assignment
 if [[ "${K8S}" = "admin" ]]; then
@@ -377,17 +455,8 @@ update_leader_heartbeat() {
     fi
 }
 
-# Handles swarm mode coordination: leader election and follower waiting.
-handle_swarm_mode() {
-    # Skip coordination if swarm mode isn't enabled
-    if [[ "${SWARM_MODE}" != "yes" ]]; then
-        return 0
-    fi
-
-    # Try to become the leader
-    try_become_leader
-
-    # If we're a follower, wait for the leader to finish setup
+# Waits for the swarm leader to finish setup before reading shared configuration.
+wait_for_swarm_completion() {
     if [[ "${AUTHORITY}" = "no" && ! -f "${OE_ROOT}/sites/docker-completed" ]]; then
         echo "Waiting for docker-leader to finish configuration (with timeout-based recovery)..."
         local -i max_wait_time="${LEADER_WAIT_TIMEOUT:-600}"  # Default: 10 minutes
@@ -400,8 +469,8 @@ handle_swarm_mode() {
             # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
             if is_leader_stale; then
                 echo "Leader appears to have crashed, attempting to take over..."
-                # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
-                if try_become_leader; then
+                try_become_leader
+                if [[ "${AUTHORITY}" = "yes" ]]; then
                     echo "Successfully became leader after previous leader failure"
                     break
                 fi
@@ -412,8 +481,11 @@ handle_swarm_mode() {
 
         # Try one more time to become leader (in case leader died just as we timed out)
         # shellcheck disable=SC2310  # set -e behavior in conditionals is intentional
-        if [[ ! -f "${OE_ROOT}/sites/docker-completed" ]] && try_become_leader; then
-            echo "Promoted to leader after waiting period"
+        if [[ ! -f "${OE_ROOT}/sites/docker-completed" ]]; then
+            try_become_leader
+            if [[ "${AUTHORITY}" = "yes" ]]; then
+                echo "Promoted to leader after waiting period"
+            fi
         fi
 
         # If we timed out, check if configuration actually exists
@@ -427,8 +499,10 @@ handle_swarm_mode() {
             fi
         fi
     fi
+}
 
-    # If we're the leader, create initiation marker and send heartbeat
+# If we're the leader, create initiation marker and restore swarm pieces.
+prepare_swarm_leader() {
     if [[ "${AUTHORITY}" = "yes" ]]; then
         touch "${OE_ROOT}/sites/docker-initiated"
         update_leader_heartbeat
@@ -443,6 +517,28 @@ handle_swarm_mode() {
             rsync --owner --group --perms --recursive --links /swarm-pieces/sites "${OE_ROOT}/"
         fi
     fi
+}
+
+# Handles swarm mode coordination: leader election and follower waiting.
+handle_swarm_mode() {
+    # Skip coordination if swarm mode isn't enabled
+    if [[ "${SWARM_MODE}" != "yes" ]]; then
+        return 0
+    fi
+
+    # Try to become the leader
+    try_become_leader
+
+    # Flex followers can prepare local source/dependencies while the leader
+    # configures the shared sites volume, then wait before reading sqlconf.php.
+    if [[ "${AUTHORITY}" = "no" && ! -f "${OE_ROOT}/sites/docker-completed" ]]; then
+        SWARM_WAIT_DEFERRED=yes
+        echo "Deferring docker-leader wait until local flex build is ready"
+        return 0
+    fi
+
+    wait_for_swarm_completion
+    prepare_swarm_leader
 }
 
 # ============================================================================
@@ -603,9 +699,6 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
         # install php dependencies
         if [[ "${DEVELOPER_TOOLS}" = "yes" ]]; then
             composer install
-            # install support for the e2e testing
-            apk update
-            apk add --no-cache chromium chromium-chromedriver
         else
             composer install --no-dev
         fi
@@ -658,6 +751,12 @@ if [[ "${NEED_COMPOSER_BUILD}" = "true" ]] || [[ "${NEED_NPM_BUILD}" = "true" ]]
     fi
 
     cd /var/www/localhost/htdocs
+fi
+
+if [[ "${SWARM_WAIT_DEFERRED}" = "yes" ]]; then
+    wait_for_swarm_completion
+    SWARM_WAIT_DEFERRED=no
+    prepare_swarm_leader
 fi
 
 if [[ "${AUTHORITY}" = "yes" ]] ||

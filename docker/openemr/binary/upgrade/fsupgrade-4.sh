@@ -40,7 +40,8 @@ for dirdata in /var/www/localhost/htdocs/openemr/sites/*/; do
     } | sed -e "s@!empty(\$_POST\['form_submit'\])@true@" \
             -e "s@\$form_old_version = \$_POST\['form_old_version'\];@\$form_old_version = '${priorOpenemrVersion}';@" \
             > /var/www/localhost/htdocs/openemr/TEMPsql_upgrade.php
-    php -f /var/www/localhost/htdocs/openemr/TEMPsql_upgrade.php
+    # Drop privileges to apache: RootCliGuard (openemr#12267) refuses root for OpenEMR CLI scripts.
+    su-exec apache php -f /var/www/localhost/htdocs/openemr/TEMPsql_upgrade.php
     rm -f /var/www/localhost/htdocs/openemr/TEMPsql_upgrade.php
     echo "Completed: Upgrade database for ${sitename} from ${priorOpenemrVersion}"
 done

@@ -14,11 +14,12 @@ spec:
       labels:
         name: phpmyadmin
     spec:
+      automountServiceAccountToken: false
       containers:
       - env:
         - name: PMA_HOSTS
           value: mysql
-        image: phpmyadmin/phpmyadmin
+        image: phpmyadmin/phpmyadmin:5.2.3@sha256:42a200db07b4e70fbf32c594ad4521cf16399b8e54bbb5adceae98e7566dfbeb
         name: phpmyadmin
         command: ["/wrapper.sh"]
         volumeMounts:
@@ -38,6 +39,16 @@ spec:
         ports:
         - containerPort: 80
         - containerPort: 443
+        livenessProbe:
+          tcpSocket:
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          tcpSocket:
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
         resources:
           requests:  
             cpu: 100m       
@@ -62,11 +73,11 @@ spec:
           items:
           - key: ca.crt
             path: ca.pem
-          # uncomment below if forcing mysql x509
-          #- key: tls.crt
-          #  path: tls.crt
-          #- key: tls.key
-          #  path: tls.key
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
+          # To downgrade to tls (no client certs): remove tls.crt and tls.key items above
       - name: phpmyadmin-config-map
         configMap:
           name: phpmyadmin-configmap

@@ -3,8 +3,9 @@ kind: PersistentVolumeClaim
 metadata:  
   name: websitevolume
 spec:
+  storageClassName: nfs
   accessModes:
-  - ReadWriteOnce
+  - ReadWriteMany
   resources:
     requests:
-      storage: 10Gi
+      storage: 1Gi

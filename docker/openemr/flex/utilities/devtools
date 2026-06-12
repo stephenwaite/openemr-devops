@@ -27,6 +27,16 @@
 #   rector-dry-run              - Preview PHP code modernization changes
 #   rector-process              - Apply PHP code modernization changes
 #   phpstan                     - Run PHPStan static analysis
+#   phpstan-generate            - Regenerate PHPStan baseline from current errors
+#   phpstan-generate-reset      - Wipe and regenerate PHPStan baseline from scratch
+#   codespell                   - Run codespell (composer codespell)
+#   conventional-commits-check  - Validate conventional commit messages
+#   require-checker             - Run composer-require-checker
+#   composer-validate           - Validate composer.json (strict)
+#   composer-normalize          - Check composer.json normalization (dry-run)
+#   composer-normalize-fix      - Apply composer.json normalization
+#   composer-checks             - Run composer "checks" (validate + normalize dry-run)
+#   code-quality                - Run full composer "code-quality" suite
 #
 # BUILD & ASSETS:
 #   build-themes            - Build OpenEMR CSS themes
@@ -43,6 +53,9 @@
 #   validators-test         - Run validator tests
 #   controllers-test        - Run controller tests
 #   common-test             - Run common tests
+#   phpunit-isolated        - Run PHP isolated tests (no database required)
+#   update-twig-fixtures           - Regenerate Twig render-test fixtures (mutates fixture files; review diff)
+#   update-layout-field-fixtures   - Regenerate layout field render-test fixtures (mutates fixture files; review diff)
 #   clean-sweep             - Run all code quality checks and tests
 #   clean-sweep-tests       - Run all tests only
 #
@@ -114,6 +127,22 @@
 
 source /root/devtoolsLibrary.source
 
+# Run a command from the openemr web root. Lets handlers say what they're
+# doing in one line instead of the cd-then-cmd two-step. `cd || exit 1`
+# aborts the script if the webroot is missing rather than silently invoking
+# from a wrong cwd (devtools has no `set -e`).
+run_at_openemr_root() {
+    cd /var/www/localhost/htdocs/openemr || exit 1
+    "$@"
+}
+
+# Composer-specific convenience wrapper; equivalent to
+# `run_at_openemr_root composer "$@"` but reads more naturally for the
+# many composer-based code-quality handlers.
+run_composer_at_root() {
+    run_at_openemr_root composer "$@"
+}
+
 # ============================================================================
 # LOGGING COMMANDS
 # ============================================================================
@@ -136,148 +165,270 @@ if [ "$1" = "build-themes" ]; then
 fi
 
 # ============================================================================
-# CODE QUALITY & STYLING COMMANDS
+# CODE QUALITY, STYLING & TESTING COMMANDS
 # ============================================================================
-if [ "$1" = "psr2-report" ] || [ "$1" = "psr12-report" ]; then
+# Per-task helpers -- one function per handler, so the dispatch table below
+# stays a flat name-to-action mapping and clean-sweep / clean-sweep-tests
+# can list exactly which tasks they compose.
+do_psr12_report() {
     echo "Generating PSR12 code styling error report "
-    cd /var/www/localhost/htdocs/openemr
-    composer phpcs
-fi
+    run_composer_at_root phpcs
+}
 
-if [ "$1" = "psr12-src-report" ]; then
+do_psr12_src_report() {
     echo "Generating strict PSR12 code styling error report for src directory "
-    cd /var/www/localhost/htdocs/openemr
-    composer phpcs -- --standard=PSR12 -d memory_limit=4G -p -n src
-fi
+    run_composer_at_root phpcs -- --standard=PSR12 -d memory_limit=4G -p -n src
+}
 
-if [ "$1" = "lint-themes-report" ]; then
+do_lint_themes_report() {
     echo "Generating lint themes error report "
-    cd /var/www/localhost/htdocs/openemr
-    npm run stylelint
-fi
+    run_at_openemr_root npm run stylelint
+}
 
-if [ "$1" = "lint-javascript-report" ]; then
+do_lint_javascript_report() {
     echo "Generating lint javascript error report "
-    cd /var/www/localhost/htdocs/openemr
-    npm run lint:js
-fi
+    run_at_openemr_root npm run lint:js
+}
 
-if [ "$1" = "psr2-fix" ] ||  [ "$1" = "psr12-fix" ] || [ "$1" = "clean-sweep" ]; then
+do_psr12_fix() {
     echo "Fixing PSR12 code styling errors "
-    cd /var/www/localhost/htdocs/openemr
-    composer phpcbf
-fi
+    run_composer_at_root phpcbf
+}
 
-if [ "$1" = "lint-themes-fix" ] || [ "$1" = "clean-sweep" ]; then
+do_lint_themes_fix() {
     echo "Fixing lint themes errors "
-    cd /var/www/localhost/htdocs/openemr
-    npm run stylelint
-    npm run stylelint-fix
-fi
+    run_at_openemr_root npm run stylelint
+    run_at_openemr_root npm run stylelint-fix
+}
 
-if [ "$1" = "lint-javascript-fix" ] || [ "$1" = "clean-sweep" ]; then
+do_lint_javascript_fix() {
     echo "Fixing lint javascript errors "
-    cd /var/www/localhost/htdocs/openemr
-    npm run lint:js-fix
-fi
+    run_at_openemr_root npm run lint:js-fix
+}
 
-if [ "$1" = "php-parserror" ] || [ "$1" = "clean-sweep" ]; then
+do_php_parserror() {
     echo "Generating PHP parse errors"
-    cd /var/www/localhost/htdocs/openemr
-    find . -type f \( -name "*.php" -or -name "*.inc" \) \( -not -path "./vendor/*" -and -not -path "./node_modules/*" -and -not -path "./ccdaservice/node_modules}/*" \) -exec php -d error_reporting=32767 -l {} \; 2>&1 >&- | grep "^"
-fi
+    # Fix pre-existing typo: './ccdaservice/node_modules}/*' had a stray '}'
+    # so the exclusion silently never matched, causing php -l to be run on
+    # every .php file under ccdaservice/node_modules. Now correctly excluded.
+    run_at_openemr_root sh -c 'find . -type f \( -name "*.php" -or -name "*.inc" \) \( -not -path "./vendor/*" -and -not -path "./node_modules/*" -and -not -path "./ccdaservice/node_modules/*" \) -exec php -d error_reporting=32767 -l {} \; 2>&1 >&- | grep "^"'
+}
 
-if [ "$1" = "rector-dry-run" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_rector_dry_run() {
     echo "Rector PHP process dry-run changes"
-    cd /var/www/localhost/htdocs/openemr
-    php vendor/bin/rector process --dry-run
-fi
+    run_at_openemr_root php vendor/bin/rector process --dry-run
+}
 
-if [ "$1" = "rector-process" ] || [ "$1" = "clean-sweep" ]; then
+do_rector_process() {
     echo "Rector PHP process changes"
-    cd /var/www/localhost/htdocs/openemr
-    php vendor/bin/rector process
-fi
+    run_at_openemr_root php vendor/bin/rector process
+}
 
-if [ "$1" = "phpstan" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_phpstan() {
     echo "PHPStan diagnose"
-    cd /var/www/localhost/htdocs/openemr
-    php vendor/bin/phpstan --memory-limit=8G diagnose
-    php vendor/bin/phpstan --memory-limit=8G analyze
-fi
+    run_at_openemr_root php vendor/bin/phpstan --memory-limit=8G diagnose
+    run_at_openemr_root php vendor/bin/phpstan --memory-limit=8G analyze
+}
 
-if [ "$1" = "phpstan-generate" ]; then
+do_phpstan_generate() {
     echo "PHPStan regenerate baseline"
-    cd /var/www/localhost/htdocs/openemr
-    composer phpstan-baseline
-fi
+    run_composer_at_root phpstan-baseline
+}
 
-# ============================================================================
-# TESTING COMMANDS
-# ============================================================================
-if [ "$1" = "unit-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_phpstan_generate_reset() {
+    echo "PHPStan wipe and regenerate baseline from scratch (deletes every existing baseline entry first, then rebuilds)"
+    run_composer_at_root phpstan-baseline-reset
+}
+
+do_codespell() {
+    echo "Running codespell"
+    run_composer_at_root codespell
+}
+
+do_conventional_commits_check() {
+    echo "Validating conventional commit messages"
+    run_composer_at_root conventional-commits:check
+}
+
+do_require_checker() {
+    echo "Running composer-require-checker"
+    run_composer_at_root require-checker
+}
+
+do_composer_validate() {
+    echo "Validating composer.json (strict)"
+    run_composer_at_root validate --strict
+}
+
+do_composer_normalize() {
+    echo "Checking composer.json normalization"
+    run_composer_at_root normalize --dry-run
+}
+
+do_composer_normalize_fix() {
+    echo "Applying composer.json normalization"
+    run_composer_at_root normalize
+}
+
+do_composer_checks() {
+    echo "Running composer checks (validate + normalize dry-run)"
+    run_composer_at_root checks
+}
+
+do_code_quality() {
+    echo "Running full composer code-quality suite"
+    run_composer_at_root code-quality
+}
+
+do_unit_test() {
     echo "Running OpenEMR PHP Unit tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite unit --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite unit --testdox
+}
 
-if [ "$1" = "javascript-unit-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_javascript_unit_test() {
     echo "Running OpenEMR Javascript Unit tests"
-    cd /var/www/localhost/htdocs/openemr
-    npm run test:js
-fi
+    run_at_openemr_root npm run test:js
+}
 
-if [ "$1" = "jut-reports-build" ]; then
+do_jut_reports_build() {
     echo "Building javascript unit testing reports browser user interface, which can view in web browser at HOST/coverage/js-unit/lcov-report (HOST is the server host, for example http://localhost:8300)"
-    cd /var/www/localhost/htdocs/openemr
-    npm run test:js-coverage
+    run_at_openemr_root npm run test:js-coverage
     echo "Done, you can view reports in web browser at HOST/coverage/js-unit/lcov-report (HOST is the server host, for example http://localhost:8300)"
-fi
+}
 
-if [ "$1" = "api-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_api_test() {
     echo "Running OpenEMR API tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite api --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite api --testdox
+}
 
-if [ "$1" = "e2e-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_e2e_test() {
     echo "Running OpenEMR e2e tests"
-    cd /var/www/localhost/htdocs/openemr
     export PANTHER_NO_SANDBOX=1
     export PANTHER_CHROME_ARGUMENTS='--disable-dev-shm-usage'
     export PANTHER_CHROME_DRIVER_BINARY=/usr/lib/chromium/chromedriver
-    vendor/bin/phpunit --testsuite e2e --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite e2e --testdox
+}
 
-if [ "$1" = "fixtures-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_fixtures_test() {
     echo "Running OpenEMR Fixture tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite fixtures --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite fixtures --testdox
+}
 
-if [ "$1" = "services-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_services_test() {
     echo "Running OpenEMR Service tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite services --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite services --testdox
+}
 
-if [ "$1" = "validators-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_validators_test() {
     echo "Running OpenEMR Validator tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite validators --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite validators --testdox
+}
 
-if [ "$1" = "controllers-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_controllers_test() {
     echo "Running OpenEMR Controller tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite controllers --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite controllers --testdox
+}
 
-if [ "$1" = "common-test" ] || [ "$1" = "clean-sweep" ] || [ "$1" = "clean-sweep-tests" ]; then
+do_common_test() {
     echo "Running OpenEMR Common tests"
-    cd /var/www/localhost/htdocs/openemr
-    vendor/bin/phpunit --testsuite common --testdox
-fi
+    run_at_openemr_root vendor/bin/phpunit --testsuite common --testdox
+}
+
+do_phpunit_isolated() {
+    echo "Running OpenEMR PHP isolated tests (no database required)"
+    run_composer_at_root phpunit-isolated
+}
+
+do_update_twig_fixtures() {
+    echo "Regenerating Twig render-test fixtures (mutates fixture files under tests/Tests/Isolated/Common/Twig/fixtures/render/ -- review the diff before committing)"
+    run_composer_at_root update-twig-fixtures
+}
+
+do_update_layout_field_fixtures() {
+    echo "Regenerating layout field render-test fixtures (mutates fixture files for FieldRenderingSnapshotTest -- review the diff before committing)"
+    run_composer_at_root update-layout-field-fixtures
+}
+
+# Dispatch -- one branch per name. clean-sweep and clean-sweep-tests list
+# exactly which tasks from this section they compose, preserving prior
+# cascading-if behavior with one intentional addition: phpunit-isolated
+# now runs as part of both aggregates.
+case "$1" in
+    psr2-report|psr12-report)   do_psr12_report ;;
+    psr12-src-report)           do_psr12_src_report ;;
+    lint-themes-report)         do_lint_themes_report ;;
+    lint-javascript-report)     do_lint_javascript_report ;;
+    psr2-fix|psr12-fix)         do_psr12_fix ;;
+    lint-themes-fix)            do_lint_themes_fix ;;
+    lint-javascript-fix)        do_lint_javascript_fix ;;
+    php-parserror)              do_php_parserror ;;
+    rector-dry-run)             do_rector_dry_run ;;
+    rector-process)             do_rector_process ;;
+    phpstan)                    do_phpstan ;;
+    phpstan-generate)           do_phpstan_generate ;;
+    phpstan-generate-reset)     do_phpstan_generate_reset ;;
+    codespell)                  do_codespell ;;
+    conventional-commits-check) do_conventional_commits_check ;;
+    require-checker)            do_require_checker ;;
+    composer-validate)          do_composer_validate ;;
+    composer-normalize)         do_composer_normalize ;;
+    composer-normalize-fix)     do_composer_normalize_fix ;;
+    composer-checks)            do_composer_checks ;;
+    code-quality)               do_code_quality ;;
+    unit-test)                  do_unit_test ;;
+    javascript-unit-test)       do_javascript_unit_test ;;
+    jut-reports-build)          do_jut_reports_build ;;
+    api-test)                   do_api_test ;;
+    e2e-test)                   do_e2e_test ;;
+    fixtures-test)              do_fixtures_test ;;
+    services-test)              do_services_test ;;
+    validators-test)            do_validators_test ;;
+    controllers-test)           do_controllers_test ;;
+    common-test)                do_common_test ;;
+    phpunit-isolated)           do_phpunit_isolated ;;
+    update-twig-fixtures)       do_update_twig_fixtures ;;
+    update-layout-field-fixtures)
+                                do_update_layout_field_fixtures ;;
+    clean-sweep)
+        do_psr12_fix
+        do_lint_themes_fix
+        do_lint_javascript_fix
+        do_php_parserror
+        do_rector_dry_run
+        do_rector_process
+        do_phpstan
+        do_codespell
+        do_conventional_commits_check
+        do_require_checker
+        do_composer_validate
+        do_composer_normalize
+        do_unit_test
+        do_javascript_unit_test
+        do_api_test
+        do_e2e_test
+        do_fixtures_test
+        do_services_test
+        do_validators_test
+        do_controllers_test
+        do_common_test
+        do_phpunit_isolated
+        ;;
+    clean-sweep-tests)
+        do_rector_dry_run
+        do_phpstan
+        do_unit_test
+        do_javascript_unit_test
+        do_api_test
+        do_e2e_test
+        do_fixtures_test
+        do_services_test
+        do_validators_test
+        do_controllers_test
+        do_common_test
+        do_phpunit_isolated
+        ;;
+    *) ;;  # unmatched input falls through to subsequent sections below
+esac
 
 # ============================================================================
 # DEVELOPMENT SETUP COMMANDS
@@ -353,7 +504,7 @@ if [ "$1" = "set-swagger-to-multisite" ]; then
     fi
     echo "Setting swagger to use site ${site}"
     # first reset the openemr-api.yaml to go back to default
-    php /var/www/localhost/htdocs/openemr/bin/command-runner -c CreateAPIDocumentation
+    run_php_as_apache php /var/www/localhost/htdocs/openemr/bin/command-runner -c CreateAPIDocumentation
     # now make the needed changes if site is not default (since already set to default in above line)
     if [ "${site}" != "default" ]; then
         sed -i "s@/apis/default/@/apis/${site}/@" /var/www/localhost/htdocs/openemr/swagger/openemr-api.yaml
@@ -385,10 +536,12 @@ if [ "$1" = "backup" ]; then
         echo "Missing a backup identifier"
         exit
     fi
-    if echo "$2" | grep -Eq '[^a-zA-Z0-9\-]'; then
-        echo "Invalid identifier (can only contain numbers and letters)"
-        exit
-    fi
+    case $2 in
+        *[!a-zA-Z0-9-]*)
+            echo "Invalid identifier (can only contain numbers and letters)"
+            exit
+            ;;
+    esac
     if [ -f "/snapshots/${2}.tgz" ]; then
         echo "Identifier has already been used. Try with another identifier."
         exit
@@ -403,10 +556,12 @@ if [ "$1" = "restore" ]; then
         echo "Missing a restore identifier"
         exit
     fi
-    if echo "$2" | grep -Eq '[^a-zA-Z0-9\-]'; then
-        echo "Invalid identifier (can only contain numbers and letters)"
-        exit
-    fi
+    case $2 in
+        *[!a-zA-Z0-9-]*)
+            echo "Invalid identifier (can only contain numbers and letters)"
+            exit
+            ;;
+    esac
     if [ ! -f "/snapshots/${2}.tgz" ]; then
         echo "A backup with the identifier does not exist"
         exit
@@ -655,7 +810,7 @@ fi
 # ============================================================================
 if [ "$1" = "build-api-docs" ]; then
     echo "Building and placing api swagger docs"
-    php /var/www/localhost/htdocs/openemr/bin/console openemr:create-api-documentation
+    run_php_as_apache php /var/www/localhost/htdocs/openemr/bin/console openemr:create-api-documentation
 fi
 
 # ============================================================================

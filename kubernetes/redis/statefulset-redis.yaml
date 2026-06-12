@@ -14,15 +14,60 @@ spec:
       labels:
         app: redis
     spec:
+      automountServiceAccountToken: false
       initContainers:
       - name: config
-        image: redis:alpine
+        image: redis:8.8.0-alpine@sha256:09160599abd229764c0fb44cb6be640294e1d360a54b19985ab4843dcf2d90f1
         command: [ "sh", "-c" ]
+        env:
+        - name: REDIS_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: admin-password
+        - name: REDIS_REPLICATION_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: replication-password
+        - name: REDIS_DEFAULT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: default-password
         args:
           - |
-            echo "Copying configuration file"
-            cp /tmp/redis/redis.conf /etc/redis/redis.conf            
-            if [ "$(redis-cli -h sentinel -p 5000 ping)" != "PONG" ]; then
+            # To downgrade to tls (no client certs): change to false
+            REDISX509=true
+            TLSPARAMETERS="--tls --cacert /certs/ca.crt"
+            if $REDISX509; then
+                TLSPARAMETERS="$TLSPARAMETERS --cert /certs/tls.crt --key /certs/tls.key"
+            fi
+            # Validate passwords don't contain characters that would break Redis config/ACL format
+            for pw_name in REDIS_ADMIN_PASSWORD REDIS_REPLICATION_PASSWORD REDIS_DEFAULT_PASSWORD; do
+                eval pw_val=\$$pw_name
+                case "$pw_val" in
+                    *" "*|*$'\t'*|*$'\n'*|*$'\r'*|*">"*)
+                        echo "ERROR: $pw_name contains unsafe characters for Redis ACL (whitespace, >)" >&2
+                        exit 1
+                        ;;
+                esac
+            done
+            echo "Copying configuration file and injecting passwords"
+            cp /tmp/redis/redis.conf /etc/redis/redis.conf
+            contents=$(cat /etc/redis/redis.conf)
+            printf '%s\n' "${contents//__REPLICATION_PASSWORD__/$REDIS_REPLICATION_PASSWORD}" > /etc/redis/redis.conf
+            MY_FQDN="$(hostname).redis"
+            echo "replica-announce-ip $MY_FQDN" >> /etc/redis/redis.conf
+            echo "Generating ACL file from template"
+            cp /tmp/acl/users.acl /conf/acl/users.acl
+            contents=$(cat /conf/acl/users.acl)
+            contents="${contents//__ADMIN_PASSWORD__/$REDIS_ADMIN_PASSWORD}"
+            contents="${contents//__REPLICATION_PASSWORD__/$REDIS_REPLICATION_PASSWORD}"
+            contents="${contents//__DEFAULT_PASSWORD__/$REDIS_DEFAULT_PASSWORD}"
+            printf '%s\n' "$contents" > /conf/acl/users.acl
+            export REDISCLI_AUTH="$REDIS_DEFAULT_PASSWORD"
+            if [ "$(redis-cli $TLSPARAMETERS -h sentinel -p 26379 ping)" != "PONG" ]; then
               echo "Sentinel not found to get the master info, defaulting to redis-0"
               if [ "$(hostname)" == "redis-0" ]; then
                 echo "This is redis-0, No need to update config."
@@ -33,34 +78,64 @@ spec:
               fi
             else
               echo "Sentinel found, finding master"
-              MASTER="$(redis-cli -h sentinel -p 5000 sentinel get-master-addr-by-name mymaster | grep -E '(^redis-\d{1,})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})')"
+              MASTER="$(redis-cli $TLSPARAMETERS -h sentinel -p 26379 sentinel get-master-addr-by-name mymaster | grep -E '(^redis-\d{1,})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})')"
               echo "Master got: $MASTER, updating this in redis.conf"
               echo "REPLICAOF $MASTER 6379" >> /etc/redis/redis.conf
             fi
         volumeMounts:
+        - name: redis-certs
+          mountPath: /certs/
         - name: redis-config
           mountPath: /etc/redis/
         - name: config
           mountPath: /tmp/redis/
+        - name: config-acl-template
+          mountPath: /tmp/acl/
+        - name: config-acl
+          mountPath: /conf/acl/
       containers:
       - name: redis
-        image: redis:alpine
+        image: redis:8.8.0-alpine@sha256:09160599abd229764c0fb44cb6be640294e1d360a54b19985ab4843dcf2d90f1
         command: ["redis-server"]
         args: ["/etc/redis/redis.conf"]
         ports:
         - containerPort: 6379
           name: redis
+        livenessProbe:
+          tcpSocket:
+            port: redis
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          tcpSocket:
+            port: redis
+          initialDelaySeconds: 5
+          periodSeconds: 10
         volumeMounts:
+        - name: redis-certs
+          mountPath: /certs/
         - name: redis-config
           mountPath: /etc/redis/
         - name: config-acl
           mountPath: /conf/acl/
       volumes:
+      - name: redis-certs
+        secret:
+          secretName: redis-certs
+          items:
+          - key: ca.crt
+            path: ca.crt
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
       - name: redis-config
         emptyDir: {}
       - name: config
         configMap:
           name: redis-config
-      - name: config-acl
+      - name: config-acl-template
         configMap:
           name: redis-acl
+      - name: config-acl
+        emptyDir: {}

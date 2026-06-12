@@ -6,8 +6,9 @@ metadata:
     io.kompose.service: letsencryptvolume
   name: letsencryptvolume
 spec:
+  storageClassName: nfs
   accessModes:
-  - ReadWriteOnce
+  - ReadWriteMany
   resources:
     requests:
       storage: 1Gi

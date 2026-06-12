@@ -36,6 +36,40 @@
   "${SQL_DATA_DRIVE:=}"
 
 # ============================================================================
+# PRIVILEGE-DROP HELPER
+# ============================================================================
+# Drop privileges to apache and exec the given command + args.
+# OpenEMR's RootCliGuard (openemr#12267) refuses root for any script
+# that loads interface/globals.php or runs through bin/console —
+# invoking those as root would create root-owned files the web
+# server later cannot read, the same failure mode the guard exists
+# to catch. Use this wrapper for any `php <openemr-script>` or
+# `php bin/console …` invocation.
+#
+# Pass the command and its args as separate words, e.g.:
+#     run_php_as_apache php /path/to/script.php "key=${VAL}" "other=${X}"
+#
+# `su-exec` (alpine `su-exec` package, 14 KB static binary) runs the
+# command directly under apache's uid/gid + supplementary groups with
+# no intervening shell. Each arg reaches the target program verbatim
+# — values containing quotes, spaces, `$`, `;`, backticks, control
+# characters, or any other shell-special bytes are passed through
+# unparsed, which the equivalent `su -c "string"` form cannot do
+# without double-shell-parsing risk. su-exec also preserves the env
+# (HOME / PATH / MYSQL_* / OPENEMR_ENABLE_INSTALLER_AUTO etc.), so
+# no `-p` flag analog is needed.
+#
+# We chose su-exec over busybox `su` because busybox `su` rescans
+# its option flags across the entire arg list (not just up to USER),
+# so `-c`, `-f`, `-s` etc. appearing inside the inner command get
+# absorbed as su's own options — breaking argv-passthrough.
+# Util-linux `su` (`shadow` package) would also work but is larger
+# and alpine doesn't ship its `su` binary anyway.
+run_php_as_apache() {
+    su-exec apache "$@"
+}
+
+# ============================================================================
 # CONFIGURATION PREPARATION
 # ============================================================================
 
@@ -177,7 +211,7 @@ resetOpenemr() {
 installOpenemr() {
     echo "Re-installing OpenEMR"
     cp /root/auto_configure.php /var/www/localhost/htdocs/
-    php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
+    run_php_as_apache php /var/www/localhost/htdocs/auto_configure.php -f "${CONFIGURATION}"
     rm -f /var/www/localhost/htdocs/auto_configure.php
     gitAddSafeDirectory
 }
@@ -207,26 +241,14 @@ demoData() {
 # ============================================================================
 
 # Upgrades OpenEMR database from a specified version to the current version.
-# This function runs OpenEMR's sql_upgrade.php script programmatically
-# by modifying it to run non-interactively.
+# Invokes sql_upgrade.php in CLI mode (added in openemr/openemr#11906).
 #
 # Parameters:
 #   $1: Original OpenEMR version (e.g., "5.0.0", "6.0.0")
 #
-# Process:
-#   1. Creates a temporary version of sql_upgrade.php
-#   2. Modifies it to run non-interactively (auto-submit form)
-#   3. Sets the source version
-#   4. Executes the upgrade script
-#   5. Cleans up temporary file
-#
 # Must call prepareVariables() before calling this function.
 upgradeOpenEMR() {
-    sed -e "s@!empty(\$_POST\['form_submit'\])@true@" < /var/www/localhost/htdocs/openemr/sql_upgrade.php > /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
-    sed -i "s@\$form_old_version = \$_POST\['form_old_version'\];@\$form_old_version = '${1}';@" /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
-    sed -i "1s@^@<?php \$_GET['site'] = 'default'; ?>@" /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
-    php -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
-    rm -f /var/www/localhost/htdocs/openemr/sql_upgrade_temp.php
+    run_php_as_apache php -f /var/www/localhost/htdocs/openemr/sql_upgrade.php -- "--from=${1}"
 }
 
 # ============================================================================
@@ -511,7 +533,7 @@ importRandomPatients() {
     )
     sed -i "s@exit;@//exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     export OPENEMR_ENABLE_CCDA_IMPORT=1
-    php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr --isDev="${2}"
+    run_php_as_apache php /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php --sourcePath=/root/synthea/output/ccda --site=default --openemrPath=/var/www/localhost/htdocs/openemr "--isDev=${2}"
     sed -i "s@//exit;@exit;@" /var/www/localhost/htdocs/openemr/contrib/util/ccda_import/import_ccda.php
     echo "Completed run for following number of random patients: ${1}"
 }
@@ -550,7 +572,17 @@ generateMultisiteBank() {
         rm -fr "/var/www/localhost/htdocs/openemr/sites/${run}"
         rm /tmp/setup_dump.sql
         echo "adding ${run} multisite"
-        php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php rootpass="${MYSQL_ROOT_PASS}" server="${MYSQL_HOST}" port="${CUSTOM_PORT}" loginhost=% "login=${run}" "pass=${run}" "dbname=${run}" "site=${run}" source_site_id=default clone_database=yes
+        run_php_as_apache php /var/www/localhost/htdocs/openemr/contrib/util/installScripts/InstallerAuto.php \
+            "rootpass=${MYSQL_ROOT_PASS}" \
+            "server=${MYSQL_HOST}" \
+            "port=${CUSTOM_PORT}" \
+            loginhost=% \
+            "login=${run}" \
+            "pass=${run}" \
+            "dbname=${run}" \
+            "site=${run}" \
+            source_site_id=default \
+            clone_database=yes
         chown -R apache "/var/www/localhost/htdocs/openemr/sites/${run}"
         # shellcheck disable=SC2312  # xargs may return non-zero if find produces no output, but that's acceptable
         find "/var/www/localhost/htdocs/openemr/sites/${run}" -type d -print0 | xargs -0 chmod 500

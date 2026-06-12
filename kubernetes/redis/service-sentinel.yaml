@@ -5,8 +5,8 @@ metadata:
 spec:
   clusterIP: None
   ports:
-  - port: 5000
-    targetPort: 5000
+  - port: 26379
+    targetPort: 26379
     name: sentinel
   selector:
     app: sentinel

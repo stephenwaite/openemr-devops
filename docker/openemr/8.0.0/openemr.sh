@@ -12,6 +12,18 @@ set -e
 # shellcheck source=SCRIPTDIR/utilities/devtoolsLibrary.source
 . /root/devtoolsLibrary.source
 
+# Environment variables used by this script are supplied by the Docker runtime
+# (docker-compose `environment:` or `-e` flags). The env.stub file declares
+# them for ShellCheck's benefit using `: "${VAR:=}"` assignments that leave
+# real runtime values untouched. The stub is not shipped into the container
+# image; the `if false` keeps the `.` statically visible to ShellCheck's
+# source-follower without ever running it — BusyBox ash treats `.` as a
+# special builtin and exits the shell on file-not-found even with `|| true`.
+if false; then
+    # shellcheck source=SCRIPTDIR/env.stub
+    . /root/env.stub
+fi
+
 swarm_wait() {
     if [ ! -f /var/www/localhost/htdocs/openemr/sites/docker-completed ]; then
         # true
@@ -29,23 +41,25 @@ auto_setup() {
 
     #create temporary file cache directory for auto_configure.php to use
     TMP_FILE_CACHE_LOCATION="/tmp/php-file-cache"
-    mkdir ${TMP_FILE_CACHE_LOCATION}
+    mkdir "${TMP_FILE_CACHE_LOCATION}"
 
     #create auto_configure.ini to be able to leverage opcache for operations
-    touch auto_configure.ini
-    echo "opcache.enable=1" >> auto_configure.ini
-    echo "opcache.enable_cli=1" >> auto_configure.ini
-    echo "opcache.file_cache=${TMP_FILE_CACHE_LOCATION}" >> auto_configure.ini
-    echo "opcache.file_cache_only=1" >> auto_configure.ini
-    echo "opcache.file_cache_consistency_checks=1" >> auto_configure.ini
-    echo "opcache.enable_file_override=1" >> auto_configure.ini
-    echo "opcache.max_accelerated_files=1000000" >> auto_configure.ini
+    {
+        echo opcache.enable=1
+        echo opcache.enable_cli=1
+        echo "opcache.file_cache=${TMP_FILE_CACHE_LOCATION}"
+        echo opcache.file_cache_only=1
+        echo opcache.file_cache_consistency_checks=1
+        echo opcache.enable_file_override=1
+        echo opcache.max_accelerated_files=1000000
+    } > auto_configure.ini
 
     #run auto_configure
+    # shellcheck disable=SC2086 # CONFIGURATION intentionally word-splits into multiple -f flags (see openemr/openemr-devops#539)
     php auto_configure.php -c auto_configure.ini -f ${CONFIGURATION} || return 1
 
     #remove temporary file cache directory and auto_configure.ini
-    rm -r ${TMP_FILE_CACHE_LOCATION}
+    rm -r "${TMP_FILE_CACHE_LOCATION}"
     rm auto_configure.ini
 
     echo "OpenEMR configured."
@@ -73,13 +87,23 @@ elif [ "${K8S}" = "worker" ]; then
 fi
 
 if [ "${SWARM_MODE}" = "yes" ]; then
-    # atomically test for leadership
+    # Atomically test for leadership. Multiple swarm containers race through this block,
+    # and exactly one must become the leader. A `[ -f file ]` check followed by a create
+    # has a TOCTOU race — every racer sees the file missing, every racer creates it, every
+    # racer declares itself leader. Instead, `set -o noclobber` makes the redirect below
+    # use `open(O_CREAT|O_EXCL)`: the kernel serializes the creation, exactly one redirect
+    # succeeds, and every other container's redirect fails with EEXIST and falls into the
+    # `|| AUTHORITY=no` branch. One winner by construction.
     set -o noclobber
-    { > /var/www/localhost/htdocs/openemr/sites/docker-leader ; } &> /dev/null || AUTHORITY=no
+    : > /var/www/localhost/htdocs/openemr/sites/docker-leader 2>/dev/null || AUTHORITY=no
     set +o noclobber
 
     if [ "${AUTHORITY}" = "no" ] &&
        [ ! -f /var/www/localhost/htdocs/openemr/sites/docker-completed ]; then
+        # swarm_wait is a retry predicate: its failure is the loop termination
+        # signal, not a script-fatal condition. Disabling set -e in the while
+        # condition is intentional.
+        # shellcheck disable=SC2310
         while swarm_wait; do
             echo "Waiting for the docker-leader to finish configuration before proceeding."
             sleep 10;
@@ -222,6 +246,10 @@ if [ "${AUTHORITY}" = "yes" ]; then
        [ "${MANUAL_SETUP}" != "yes" ]; then
 
         echo "Running quick setup!"
+        # auto_setup is a retry predicate: the loop drives it to success and
+        # the ! inverts its exit for the exit condition. Disabling set -e in
+        # both the ! and while contexts is intentional.
+        # shellcheck disable=SC2310
         while ! auto_setup; do
             echo "Couldn't set up. Any of these reasons could be what's wrong:"
             echo " - You didn't spin up a MySQL container or connect your OpenEMR container to a mysql instance"
@@ -246,12 +274,12 @@ if
         while [ "${c}" -le "${DOCKER_VERSION_ROOT}" ]; do
             if [ "${c}" -gt "${DOCKER_VERSION_SITES}" ] ; then
                 echo "Start: Processing fsupgrade-${c}.sh upgrade script"
-                sh /root/fsupgrade-${c}.sh
+                sh "/root/fsupgrade-${c}.sh"
                 echo "Completed: Processing fsupgrade-${c}.sh upgrade script"
             fi
             c=$(( c + 1 ))
         done
-        echo -n ${DOCKER_VERSION_ROOT} > /var/www/localhost/htdocs/openemr/sites/default/docker-version
+        printf '%s' "${DOCKER_VERSION_ROOT}" > /var/www/localhost/htdocs/openemr/sites/default/docker-version
         echo "Completed upgrade"
     fi
 fi
@@ -269,8 +297,8 @@ if [ "${REDIS_SERVER}" != "" ] &&
     #    version 5.3.7 .
     if [ "${PHPREDIS_BUILD}" != "" ]; then
       apk update
-      apk del --no-cache php${PHP_VERSION_ABBR}-redis
-      apk add --no-cache git php${PHP_VERSION_ABBR}-dev php${PHP_VERSION_ABBR}-pecl-igbinary gcc make g++
+      apk del --no-cache "php${PHP_VERSION_ABBR}-redis"
+      apk add --no-cache git "php${PHP_VERSION_ABBR}-dev" "php${PHP_VERSION_ABBR}-pecl-igbinary" gcc make g++
       mkdir /tmpredis
       cd /tmpredis
       git clone https://github.com/phpredis/phpredis.git
@@ -282,11 +310,12 @@ if [ "${REDIS_SERVER}" != "" ] &&
       phpize83
       # note for php 8.3, needed to change from './configure --enable-redis-igbinary' to:
       ./configure --with-php-config=/usr/bin/php-config83 --enable-redis-igbinary
-      make -j $(nproc --all)
+      jobs=$(nproc --all)
+      make -j "${jobs}"
       make install
-      echo "extension=redis" > /etc/php${PHP_VERSION_ABBR}/conf.d/20_redis.ini
+      echo "extension=redis" > "/etc/php${PHP_VERSION_ABBR}/conf.d/20_redis.ini"
       rm -fr /tmpredis/phpredis
-      apk del --no-cache git php${PHP_VERSION_ABBR}-dev gcc make g++
+      apk del --no-cache git "php${PHP_VERSION_ABBR}-dev" gcc make g++
       cd /var/www/localhost/htdocs/openemr
     fi
 
@@ -436,14 +465,16 @@ if [ "${XDEBUG_IDE_KEY}" != "" ] ||
    sh xdebug.sh
    #also need to turn off opcache since it can not be turned on with xdebug
    if [ ! -f /etc/php-opcache-jit-configured ]; then
-      echo "opcache.enable=0" >> /etc/php${PHP_VERSION_ABBR}/php.ini
+      echo "opcache.enable=0" >> "/etc/php${PHP_VERSION_ABBR}/php.ini"
       touch /etc/php-opcache-jit-configured
    fi
 else
    # Configure opcache jit if Xdebug is not being used (note opcache is already on, so just need to add setting(s) to php.ini that are different from the default setting(s))
    if [ ! -f /etc/php-opcache-jit-configured ]; then
-      echo "opcache.jit=tracing" >> /etc/php${PHP_VERSION_ABBR}/php.ini
-      echo "opcache.jit_buffer_size=100M" >> /etc/php${PHP_VERSION_ABBR}/php.ini
+      {
+         echo "opcache.jit=tracing"
+         echo "opcache.jit_buffer_size=100M"
+      } >> "/etc/php${PHP_VERSION_ABBR}/php.ini"
       touch /etc/php-opcache-jit-configured
    fi
 fi

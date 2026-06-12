@@ -6,56 +6,31 @@ priorOpenemrVersion="7.0.4"
 echo "Start: Upgrade to docker-version 9"
 
 # Perform codebase upgrade on each directory in sites/
-for dir in $(find /var/www/localhost/htdocs/openemr/sites/* -maxdepth 0 -type d ); do
-    sitename=$(basename "${dir}")
+for dir in /var/www/localhost/htdocs/openemr/sites/*/; do
+    dir="${dir%/}"
+    sitename=${dir##*/}
 
     # Ensure have all directories
     echo "Start: Ensure have all directories in ${sitename}"
-    if [ ! -d ${dir}/documents/certificates ]; then
-        mkdir -p ${dir}/documents/certificates
-    fi
-    if [ ! -d ${dir}/documents/couchdb ]; then
-        mkdir -p ${dir}/documents/couchdb
-    fi
-    if [ ! -d ${dir}/documents/custom_menus/patient_menus ]; then
-        mkdir -p ${dir}/documents/custom_menus/patient_menus
-    fi
-    if [ ! -d ${dir}/documents/edi ]; then
-        mkdir -p ${dir}/documents/edi
-    fi
-    if [ ! -d ${dir}/documents/era ]; then
-        mkdir -p ${dir}/documents/era
-    fi
-    if [ ! -d ${dir}/documents/letter_templates ]; then
-        mkdir -p ${dir}/documents/letter_templates
-    fi
-    if [ ! -d ${dir}/documents/logs_and_misc/methods ]; then
-        mkdir -p ${dir}/documents/logs_and_misc/methods
-    fi
-    if [ ! -d ${dir}/documents/mpdf/pdf_tmp ]; then
-        mkdir -p ${dir}/documents/mpdf/pdf_tmp
-    fi
-    if [ ! -d ${dir}/documents/onsite_portal_documents/templates ]; then
-        mkdir -p ${dir}/documents/onsite_portal_documents/templates
-    fi
-    if [ ! -d ${dir}/documents/procedure_results ]; then
-        mkdir -p ${dir}/documents/procedure_results
-    fi
-    if [ ! -d ${dir}/documents/smarty/gacl ]; then
-        mkdir -p ${dir}/documents/smarty/gacl
-    fi
-    if [ ! -d ${dir}/documents/smarty/main ]; then
-        mkdir -p ${dir}/documents/smarty/main
-    fi
-    if [ ! -d ${dir}/documents/temp ]; then
-        mkdir -p ${dir}/documents/temp
-    fi
+    mkdir -p \
+        "${dir}/documents/certificates" \
+        "${dir}/documents/couchdb" \
+        "${dir}/documents/custom_menus/patient_menus" \
+        "${dir}/documents/edi" \
+        "${dir}/documents/era" \
+        "${dir}/documents/letter_templates" \
+        "${dir}/documents/logs_and_misc/methods" \
+        "${dir}/documents/mpdf/pdf_tmp" \
+        "${dir}/documents/onsite_portal_documents/templates" \
+        "${dir}/documents/procedure_results" \
+        "${dir}/documents/smarty/gacl" \
+        "${dir}/documents/smarty/main" \
+        "${dir}/documents/temp"
     echo "Completed: Ensure have all directories in ${sitename}"
 
     # Clear smarty cache
     echo "Start: Clear smarty cache in ${sitename}"
-    rm -fr ${dir}/documents/smarty/gacl/*
-    rm -fr ${dir}/documents/smarty/main/*
+    rm -fr "${dir}/documents/smarty/gacl"/* "${dir}/documents/smarty/main"/*
     echo "Completed: Clear smarty cache in ${sitename}"
 done
 
@@ -65,8 +40,9 @@ chown -R apache:root /var/www/localhost/htdocs/openemr/sites/
 echo "Completed: Fix permissions"
 
 # Perform database upgrade on each directory in sites/
-for dirdata in $(find /var/www/localhost/htdocs/openemr/sites/* -maxdepth 0 -type d ); do
-    sitename=$(basename "${dirdata}")
+for dirdata in /var/www/localhost/htdocs/openemr/sites/*/; do
+    dirdata="${dirdata%/}"
+    sitename=${dirdata##*/}
 
     # Upgrade database
     echo "Start: Upgrade database for ${sitename} from ${priorOpenemrVersion}"

@@ -65,7 +65,10 @@ RUN apk add --no-cache \
 # dcron (scheduled tasks), git (version control), imagemagick (image processing),
 # jq (JSON processor), mariadb-client (database client), mariadb-connector-c (DB connector),
 # ncurses (terminal), nodejs/npm (JavaScript runtime), openssl/openssl-dev (cryptography),
-# perl (interpreter), rsync (file sync), shadow (user management), tar (archives)
+# perl (interpreter), rsync (file sync), shadow (user management), su-exec (lightweight
+# privilege-drop tool used by run_php_as_apache to invoke OpenEMR CLI scripts as
+# the apache user without an intermediate shell — busybox `su` rescans options
+# across the whole arg list, which breaks argv-passthrough), tar (archives)
 RUN apk add --no-cache \
     apache2 \
     apache2-proxy \
@@ -87,6 +90,7 @@ RUN apk add --no-cache \
     perl \
     rsync \
     shadow \
+    su-exec \
     tar
 
 # Install PHP and all required extensions for OpenEMR

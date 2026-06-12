@@ -14,20 +14,38 @@ spec:
       labels:
         app: sentinel
     spec:
+      automountServiceAccountToken: false
       initContainers:
       - name: config
-        image: redis:alpine
+        image: redis:8.8.0-alpine@sha256:09160599abd229764c0fb44cb6be640294e1d360a54b19985ab4843dcf2d90f1
         command: [ "sh", "-c" ]
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: admin-password
+        - name: REDIS_DEFAULT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: default-password
         args:
           - |
-            REDIS_PASSWORD=adminpassword
+            # To downgrade to tls (no client certs): change to false
+            REDISX509=true
             nodes=redis-0.redis,redis-1.redis,redis-2.redis
+            TLSPARAMETERS="--tls --cacert /certs/ca.crt"
+            if $REDISX509; then
+                TLSPARAMETERS="$TLSPARAMETERS --cert /certs/tls.crt --key /certs/tls.key"
+            fi
+            export REDISCLI_AUTH="$REDIS_PASSWORD"
             echo "Looping through the redis list to see if Redis Master node is available now"
             while [ 1 ]
             do
                 for i in ${nodes//,/ }
                 do
-                    MASTER=$(redis-cli --no-auth-warning --raw -h $i --user admin -a $REDIS_PASSWORD info replication | awk '{print $1}' | grep master_host: | cut -d ":" -f2)
+                    MASTER=$(redis-cli $TLSPARAMETERS --raw -h $i --user admin info replication | awk '{print $1}' | grep master_host: | cut -d ":" -f2)
                     if [ "$MASTER" == "" ]; then
                         echo "no master info found in $i"
                         MASTER=
@@ -45,7 +63,13 @@ spec:
                 fi
             done
             echo "Creating Sentinel configuration file"
-            echo "port 5000
+            SENTINEL_CONF="tls-port 26379
+            port 0
+            tls-cert-file /certs/tls.crt
+            tls-key-file /certs/tls.key
+            tls-ca-cert-file /certs/ca.crt
+            tls-replication yes
+            requirepass $REDIS_DEFAULT_PASSWORD
             sentinel monitor mymaster $MASTER 6379 2
             sentinel resolve-hostnames yes
             sentinel announce-hostnames yes
@@ -53,26 +77,57 @@ spec:
             sentinel failover-timeout mymaster 60000
             sentinel parallel-syncs mymaster 1
             sentinel auth-user mymaster admin
-            sentinel auth-pass mymaster $REDIS_PASSWORD
-            " > /etc/redis/sentinel.conf
-            cat /etc/redis/sentinel.conf
+            sentinel auth-pass mymaster $REDIS_PASSWORD"
+            if $REDISX509; then
+                SENTINEL_CONF="$SENTINEL_CONF
+            tls-auth-clients yes"
+            else
+                SENTINEL_CONF="$SENTINEL_CONF
+            tls-auth-clients no"
+            fi
+            echo "$SENTINEL_CONF" > /etc/redis/sentinel.conf
+            echo "Sentinel configuration written"
         volumeMounts:
+        - name: sentinel-certs
+          mountPath: /certs/
         - name: redis-config
           mountPath: /etc/redis/
       containers:
       - name: sentinel
-        image: redis:alpine
+        image: redis:8.8.0-alpine@sha256:09160599abd229764c0fb44cb6be640294e1d360a54b19985ab4843dcf2d90f1
         command: ["redis-sentinel"]
         args: ["/etc/redis/sentinel.conf"]
         ports:
-        - containerPort: 5000
+        - containerPort: 26379
           name: sentinel
+        livenessProbe:
+          tcpSocket:
+            port: sentinel
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          tcpSocket:
+            port: sentinel
+          initialDelaySeconds: 5
+          periodSeconds: 10
         volumeMounts:
+        - name: sentinel-certs
+          mountPath: /certs/
         - name: redis-config
           mountPath: /etc/redis/
         - name: data
           mountPath: /data
       volumes:
+      - name: sentinel-certs
+        secret:
+          secretName: sentinel-certs
+          items:
+          - key: ca.crt
+            path: ca.crt
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
       - name: redis-config
         emptyDir: {}
   volumeClaimTemplates:

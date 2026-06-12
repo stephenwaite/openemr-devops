@@ -4,6 +4,6 @@ metadata:
   name: redis-acl
 data:
   users.acl: |
-    user admin on >adminpassword ~* &* +@all
-    user replication on >replicationpassword +psync +replconf +ping
-    user default on >defaultpassword ~* &* +@all -@dangerous
+    user admin on >__ADMIN_PASSWORD__ ~* &* +@all
+    user replication on >__REPLICATION_PASSWORD__ +psync +replconf +ping
+    user default on >__DEFAULT_PASSWORD__ ~* &* +@all -@dangerous

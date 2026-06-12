@@ -42,6 +42,46 @@ updates:
     schedule:
       interval: "daily"
 
+  # Docker - Kubernetes manifests
+  # Dependabot's docker ecosystem supports Kubernetes YAML files (image: fields).
+  # Block major/minor bumps for version-pinned images (openemr, mariadb).
+  - package-ecosystem: "docker"
+    directories:
+    - "/kubernetes"
+    - "/kubernetes/openemr"
+    - "/kubernetes/mysql"
+    - "/kubernetes/redis"
+    - "/kubernetes/phpmyadmin"
+    - "/kubernetes/nfs"
+    schedule:
+      interval: "daily"
+    ignore:
+    - dependency-name: openemr/openemr
+      update-types: [version-update:semver-major, version-update:semver-minor, version-update:semver-patch]
+    - dependency-name: mariadb
+      update-types: [version-update:semver-major, version-update:semver-minor]
+    groups:
+      mariadb:
+        patterns:
+        - mariadb
+      redis:
+        patterns:
+        - redis
+      openemr-images:
+        patterns:
+        - openemr/*
+      phpmyadmin:
+        patterns:
+        - phpmyadmin
+      infrastructure:
+        patterns:
+        - busybox
+        - registry.k8s.io/*
+    labels:
+    - dependencies
+    - docker
+    - kubernetes
+
   # Docker Compose - packages/appliance
   - package-ecosystem: "docker"
     directory: "/packages/appliance"

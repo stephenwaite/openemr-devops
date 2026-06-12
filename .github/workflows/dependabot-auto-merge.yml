@@ -1,0 +1,30 @@
+name: Dependabot Auto-Merge
+
+on:
+  pull_request_target:
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.AUTO_MERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTO_MERGE_APP_PRIVATE_KEY }}
+
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      # Only auto-merge Kubernetes Docker image updates
+      - name: Enable auto-merge for Kubernetes Docker updates
+        if: steps.metadata.outputs.package-ecosystem == 'docker' && (steps.metadata.outputs.directory == '/kubernetes' || startsWith(steps.metadata.outputs.directory, '/kubernetes/'))
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}

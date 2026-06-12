@@ -16,13 +16,14 @@ spec:
       labels:
         name: openemr
     spec:
+      automountServiceAccountToken: false
       initContainers:
       - name: init-mysql-wait
-        image: busybox:1.28
-        command: ['sh', '-c', "until nslookup mysql.$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace).svc.cluster.local; do echo waiting for mysql; sleep 2; done"]
+        image: busybox:1.38.0@sha256:fd8d9aa63ba2f0982b5304e1ee8d3b90a210bc1ffb5314d980eb6962f1a9715d
+        command: ['sh', '-c', "until nc -z mysql 3306; do echo waiting for mysql; sleep 2; done"]
       - name: init-redis-wait
-        image: busybox:1.28
-        command: ['sh', '-c', "until nslookup redis.$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace).svc.cluster.local; do echo waiting for redis; sleep 2; done"]
+        image: busybox:1.38.0@sha256:fd8d9aa63ba2f0982b5304e1ee8d3b90a210bc1ffb5314d980eb6962f1a9715d
+        command: ['sh', '-c', "until nc -z redis 6379; do echo waiting for redis; sleep 2; done"]
       containers:
       - env:
         - name: MYSQL_HOST
@@ -46,17 +47,41 @@ spec:
               key: admin-pass
         - name: OE_USER
           value: "admin"
-        - name: REDIS_SERVER
-          value: "redisproxy"
-        - name: REDIS_PASSWORD
-          value: "defaultpassword"
+        - name: SESSION_STORAGE_MODE
+          value: "predis-sentinel"
+        - name: REDIS_SENTINELS
+          value: "sentinel-0.sentinel|||sentinel-1.sentinel|||sentinel-2.sentinel"
+        - name: REDIS_MASTER
+          value: "mymaster"
+        - name: REDIS_SENTINELS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: default-password
+        - name: REDIS_MASTER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: default-password
+        - name: REDIS_TLS
+          value: "yes"
+        - name: REDIS_X509
+          value: "yes"
+        - name: REDIS_TLS_CERT_KEY_PATH
+          value: "/redis-certs"
+        # To downgrade redis connection security:
+        #   tls (no client certs): remove REDIS_X509 above and remove redis client cert/key volume items below
+        #   tcp (no encryption): also remove REDIS_TLS and REDIS_TLS_CERT_KEY_PATH above and remove
+        #     the entire redis-openemr-client-certs volume and volumeMount below
         - name: SWARM_MODE
           value: "yes"
-        - name: FORCE_DATABASE_SSL_CONNECT
-        # uncomment below line (and comment above line) if forcing mysql x509
-        #- name: FORCE_DATABASE_X509_CONNECT
+        - name: FORCE_DATABASE_X509_CONNECT
           value: "1"
-        image: openemr/openemr:7.0.3
+        # To downgrade mysql connection security:
+        #   tls (no client certs): change FORCE_DATABASE_X509_CONNECT to FORCE_DATABASE_SSL_CONNECT
+        #     and remove mysql cert/key volume mounts below
+        #   tcp (no encryption): also remove the env var above and remove mysql ca volume mount below
+        image: openemr/openemr:8.1.0@sha256:1c77d0aeea8a42509bb2ce1b9de914c183d25b4f9ba169008c88169c6a665a7d
         name: openemr
         ports:
         - containerPort: 80
@@ -65,9 +90,23 @@ spec:
           limits:
             cpu: 1000m
             memory: 1G
+        readinessProbe:
+          exec:
+            command:
+            - cat
+            - /root/instance-swarm-ready
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        livenessProbe:
+          tcpSocket:
+            port: 443
+          initialDelaySeconds: 60
+          periodSeconds: 30
         volumeMounts:
         - mountPath: /root/certs/mysql/server
           name: mysql-openemr-client-certs
+        - mountPath: /redis-certs
+          name: redis-openemr-client-certs
         - mountPath: /var/www/localhost/htdocs/openemr/sites
           name: websitevolume
         - mountPath: /etc/ssl
@@ -82,11 +121,26 @@ spec:
           items:
           - key: ca.crt
             path: mysql-ca
-          # uncomment below if forcing mysql x509
-          #- key: tls.crt
-          #  path: mysql-cert
-          #- key: tls.key
-          #  path: mysql-key
+          - key: tls.crt
+            path: mysql-cert
+          - key: tls.key
+            path: mysql-key
+      - name: redis-openemr-client-certs
+        secret:
+          secretName: redis-openemr-client-certs
+          items:
+          - key: ca.crt
+            path: redis-master-ca
+          - key: tls.crt
+            path: redis-master-cert
+          - key: tls.key
+            path: redis-master-key
+          - key: ca.crt
+            path: redis-sentinel-ca
+          - key: tls.crt
+            path: redis-sentinel-cert
+          - key: tls.key
+            path: redis-sentinel-key
       - name: websitevolume
         persistentVolumeClaim:
           claimName: websitevolume

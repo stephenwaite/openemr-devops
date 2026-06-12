@@ -13,9 +13,9 @@ data:
     $cfg['Servers'][$i]['ssl_ca'] = '/etc/mysql/ca.pem';
     // Enable SSL verification
     $cfg['Servers'][$i]['ssl_verify'] = true;
-    // uncomment below if forcing mysql x509
-    // $cfg['Servers'][$i]['ssl_cert'] = '/etc/mysql/tls.crt';
-    // $cfg['Servers'][$i]['ssl_key'] = '/etc/mysql/tls.key';
+    $cfg['Servers'][$i]['ssl_cert'] = '/etc/mysql/tls.crt';
+    $cfg['Servers'][$i]['ssl_key'] = '/etc/mysql/tls.key';
+    // To downgrade to tls (no client certs): comment out ssl_cert and ssl_key lines above
 
   000-default.conf: |
     ServerAdmin webmaster@localhost

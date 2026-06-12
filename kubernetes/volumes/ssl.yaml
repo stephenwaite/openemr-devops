@@ -3,8 +3,9 @@ kind: PersistentVolumeClaim
 metadata:
   name: sslvolume
 spec:
+  storageClassName: nfs
   accessModes:
-  - ReadWriteOnce
+  - ReadWriteMany
   resources:
     requests:
       storage: 1Gi

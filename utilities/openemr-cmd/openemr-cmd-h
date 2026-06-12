@@ -17,7 +17,9 @@ if (( $# == 0 )); then
     Usage: openemr-cmd-h keyword
     e.g.   openemr-cmd-h ssl
     h                         openemr-cmd -h
+    worktree                  worktree-management
     docker                    docker-management
+    pre-commit                pre-commit-management
     php                       php-management
     test                      test-management
     sweep                     sweep-management
@@ -35,14 +37,20 @@ fi
 
 # Use ${FIRST_ARG}
 case "${FIRST_ARG}" in
+    worktree)
+        filter_help_output worktree-management 13
+        ;;
     docker)
-        filter_help_output docker-management 8
+        filter_help_output docker-management 10
+        ;;
+    pre-commit)
+        filter_help_output pre-commit-management 8
         ;;
     php)
-        filter_help_output php-management 9
+        filter_help_output php-management 24
         ;;
     test)
-        filter_help_output test-management 8
+        filter_help_output test-management 13
         ;;
     sweep)
         filter_help_output sweep-management 2
@@ -69,7 +77,7 @@ case "${FIRST_ARG}" in
         filter_help_output webroot-management 2
         ;;
     others)
-        filter_help_output others: 5
+        filter_help_output others: 4
         ;;
     h)
         openemr-cmd -h

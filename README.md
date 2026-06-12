@@ -20,7 +20,7 @@ OpenEMR administration and deployment tooling
 ### Deployment Options
 
 * [Ubuntu Installer](packages/appliance): Launch OpenEMR on any Ubuntu 24.04 instance
-* [Kubernetes](kubernetes): Two-worker OpenEMR Kubernetes orchestration on Minikube
+* [Kubernetes](kubernetes): OpenEMR Kubernetes orchestration. Working starting point with mTLS, Redis Sentinel failover, multi-node support; also serves as a reference for secure distributed deployments
 * [Raspberry Pi](raspberrypi): Install OpenEMR Docker on Raspberry Pi (supports ARMv8 infrastructure)
 
 ### Installations for Amazon Web Services

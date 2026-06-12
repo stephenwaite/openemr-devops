@@ -21,13 +21,25 @@ data:
     
     # This is used by the replics nodes to communicate with master to replicate the data.
     # we are using a user called "replication" for this, and the a strong pwd for the same is given in masterauth
-    masterauth replicationpassword
+    masterauth __REPLICATION_PASSWORD__
     masteruser replication
     
     # this is the second ConfigMap will be mounted to. it has the list of users needed.
     aclfile /conf/acl/users.acl
     
-    # port, each redis nodes will be used
-    port 6379
+    # tls certs and setting
+    tls-cert-file /certs/tls.crt
+    tls-key-file /certs/tls.key
+    tls-ca-cert-file /certs/ca.crt
+    tls-auth-clients yes
+    tls-replication yes
+
+    # port, each redis nodes will be used (only use tls)
+    port 0
+    tls-port 6379
+
+    # To downgrade redis connection security:
+    #   tls (no client certs): change "tls-auth-clients yes" to "tls-auth-clients no"
+    #   tcp (no encryption): remove all tls lines above and change "port 0" to "port 6379" and remove "tls-port 6379"
     # More configurations are optional, if not provided, redis will consider default values ------
     # ------ More details on configuration : https://redis.io/docs/manual/config/ ------

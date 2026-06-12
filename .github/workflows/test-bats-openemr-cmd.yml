@@ -1,0 +1,38 @@
+name: BATS openemr-cmd
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/test-bats-openemr-cmd.yml'
+      - 'utilities/openemr-cmd/**'
+      - 'tests/bats/openemr-cmd/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/test-bats-openemr-cmd.yml'
+      - 'utilities/openemr-cmd/**'
+      - 'tests/bats/openemr-cmd/**'
+
+jobs:
+  bats-openemr-cmd:
+    name: BATS openemr-cmd (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Bats
+        run: |
+          git clone --depth 1 https://github.com/bats-core/bats-core.git /tmp/bats-core
+          /tmp/bats-core/install.sh "$HOME/bats"
+          echo "$HOME/bats/bin" >> "$GITHUB_PATH"
+          echo "PATH=$HOME/bats/bin:$PATH" >> "$GITHUB_ENV"
+      - name: Install Bats assertion libraries
+        run: |
+          git clone --depth 1 https://github.com/bats-core/bats-support.git tests/bats/test_helper/bats-support
+          git clone --depth 1 https://github.com/bats-core/bats-assert.git tests/bats/test_helper/bats-assert
+      - name: Run BATS tests (openemr-cmd)
+        run: bats tests/bats/openemr-cmd/

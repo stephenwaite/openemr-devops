@@ -1,0 +1,8 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs
+provisioner: openemr.org/nfs
+allowVolumeExpansion: true
+mountOptions:
+  - vers=4.1
