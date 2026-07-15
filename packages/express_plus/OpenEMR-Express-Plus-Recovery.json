@@ -195,6 +195,17 @@
             "Type": "AWS::KMS::Key",
             "UpdateReplacePolicy": "Retain"
         },
+        "OpenEMRKeyAlias": {
+            "DeletionPolicy": "Retain",
+            "Properties": {
+                "AliasName": {
+                    "Fn::Join": ["", ["alias/", { "Ref": "AWS::StackName" }]]
+                },
+                "TargetKeyId": { "Ref": "OpenEMRKey" }
+            },
+            "Type": "AWS::KMS::Alias",
+            "UpdateReplacePolicy": "Retain"
+        },
         "PublicSubnet1": {
             "Properties": {
                 "AvailabilityZone": {
